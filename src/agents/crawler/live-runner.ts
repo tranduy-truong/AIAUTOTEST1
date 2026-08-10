@@ -504,6 +504,27 @@ async function pickGuidedLocator(
   throw new Error(`Guided Learning khong tao duoc selector duy nhat cho "${target}"`);
 }
 
+async function learnGuidedLocatorFor(
+  page: Page,
+  stepType: string,
+  target: string,
+  snapshot: DomSnapshot,
+  runtime: LocatorRuntime,
+  context?: string,
+): Promise<Locator> {
+  const choice = await pickGuidedLocator(page, stepType, target);
+  rememberLearnedLocator(runtime.registry, {
+    pageUrl: page.url(),
+    stepType,
+    target,
+    context,
+    selector: choice.selector,
+  });
+  saveLocatorRegistry(runtime.registry);
+  annotateGuidedBinding(snapshot, stepType, target, choice.selector, choice);
+  return page.locator(choice.selector);
+}
+
 async function uniqueLocatorFor(
   page: Page,
   stepType: string,
@@ -546,17 +567,7 @@ async function uniqueLocatorFor(
   }
 
   if (runtime.guided) {
-    const choice = await pickGuidedLocator(page, stepType, target);
-    rememberLearnedLocator(runtime.registry, {
-      pageUrl: page.url(),
-      stepType,
-      target,
-      context,
-      selector: choice.selector,
-    });
-    saveLocatorRegistry(runtime.registry);
-    annotateGuidedBinding(snapshot, stepType, target, choice.selector, choice);
-    return page.locator(choice.selector);
+    return learnGuidedLocatorFor(page, stepType, target, snapshot, runtime, context);
   }
 
   throw new Error(`Khong tim thay locator duy nhat cho "${target}" (${resolution.matchedBy})`);
@@ -842,7 +853,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                 snapshots.push(readySnapshot);
               }
             } else if (step.type === 'select') {
-              const locator = await uniqueLocator(page, step, beforeAction, runtime);
+              let locator = await uniqueLocator(page, step, beforeAction, runtime);
               if (await locator.evaluate(element => element.tagName.toLowerCase() === 'select')) {
                 await locator.selectOption({ label: step.value });
               } else {
@@ -855,13 +866,45 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                     'option',
                     step.value || '',
                     `during step ${stepNumber}: options for ${step.raw}`,
+                    2500,
                   );
                 } catch (error) {
                   if (!guided) throw error;
-                  optionSnapshot = await captureSnapshot(
-                    page,
-                    `during step ${stepNumber}: guided options for ${step.raw}`,
+
+                  // The automatically resolved trigger did not reveal the
+                  // requested option. Close any wrong popup, learn the actual
+                  // trigger, then execute that learned click ourselves. This
+                  // prevents a manual browser click from silently making a bad
+                  // Action Plan appear valid.
+                  console.warn(
+                    `[Guided Learning] Trigger tự động của "${step.target}" không mở đúng danh sách; ` +
+                    `cần chọn lại chính dropdown này.`,
                   );
+                  await page.keyboard.press('Escape').catch(() => undefined);
+                  locator = await learnGuidedLocatorFor(
+                    page,
+                    'select',
+                    step.target || '',
+                    beforeAction,
+                    runtime,
+                  );
+                  await locator.click({ timeout: 10000 });
+                  await waitForStateSettled(page);
+
+                  try {
+                    optionSnapshot = await waitForVerifiedTarget(
+                      page,
+                      'option',
+                      step.value || '',
+                      `during step ${stepNumber}: options after guided trigger for ${step.raw}`,
+                      5000,
+                    );
+                  } catch {
+                    optionSnapshot = await captureSnapshot(
+                      page,
+                      `during step ${stepNumber}: guided options for ${step.raw}`,
+                    );
+                  }
                 }
                 snapshots.push(optionSnapshot);
                 const option = await uniqueLocatorFor(
