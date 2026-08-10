@@ -15,7 +15,7 @@ import {
   LocatorRegistry,
   rememberLearnedLocator,
   saveLocatorRegistry,
-} from '../../core/locator-registry.js';
+} from './locator-registry.js';
 
 interface GuidedChoice extends Partial<ElementInfo> {
   selector: string;
@@ -475,7 +475,7 @@ async function pickGuidedLocator(
 ): Promise<GuidedChoice> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     console.log(
-      `[Guided Learning] Không xác minh được "${target}". ` +
+      `[Crawler] Không tự xác minh được "${target}". ` +
       `Hãy click đúng phần tử trên browser (lần ${attempt}/3, ESC để hủy).`,
     );
     await page.evaluate(guidedPickScript(`${stepType}: ${target}`));
@@ -489,19 +489,19 @@ async function pickGuidedLocator(
     ) as (GuidedChoice & { cancelled?: boolean }) | null;
 
     if (!result || result.cancelled) {
-      throw new Error(`Guided Learning da huy cho "${target}"`);
+      throw new Error(`Crawler da huy viec hoc locator cho "${target}"`);
     }
     if (!result.selector) continue;
 
     const locator = page.locator(result.selector);
     if (await locatorIsUniqueAndVisible(locator)) {
-      console.log(`[Guided Learning] Đã học selector cho "${target}": ${result.selector}`);
+      console.log(`[Crawler] Đã ghi nhớ locator cho "${target}": ${result.selector}`);
       return result;
     }
-    console.warn(`[Guided Learning] Selector chưa duy nhất/hiển thị, vui lòng chọn lại.`);
+    console.warn(`[Crawler] Locator chưa duy nhất/hiển thị, vui lòng chọn lại.`);
   }
 
-  throw new Error(`Guided Learning khong tao duoc selector duy nhat cho "${target}"`);
+  throw new Error(`Crawler khong hoc duoc locator duy nhat cho "${target}"`);
 }
 
 async function learnGuidedLocatorFor(
@@ -546,12 +546,12 @@ async function uniqueLocatorFor(
       learned.lastVerifiedAt = new Date().toISOString();
       annotateGuidedBinding(snapshot, stepType, target, learned.selector);
       saveLocatorRegistry(runtime.registry);
-      console.log(`[Guided Learning] Dùng locator đã học cho "${target}".`);
+      console.log(`[Crawler] Dùng locator đã ghi nhớ cho "${target}".`);
       return learnedLocator;
     }
     forgetLearnedLocator(runtime.registry, learned);
     saveLocatorRegistry(runtime.registry);
-    console.warn(`[Guided Learning] Locator cũ của "${target}" đã hỏng; cần học lại.`);
+    console.warn(`[Crawler] Locator cũ của "${target}" đã hỏng; cần xác nhận lại.`);
   }
 
   const resolution = resolveLocator(stepType, target, snapshot);
@@ -766,7 +766,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
 
   try {
     const headless = guided ? false : crawlerRunsHeadless();
-    console.log(`[Live Runner] Guided Learning: ${guided ? 'bat' : 'tat'}`);
+    if (guided) console.log('[Live Runner] Crawler co the yeu cau xac nhan locator khi can.');
     console.log(`[Live Runner] Che do trinh duyet: ${headless ? 'headless' : 'headed'}`);
     browser = await chromium.launch({ headless });
 
@@ -842,7 +842,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                 } catch (error) {
                   if (!guided) throw error;
                   console.warn(
-                    `[Guided Learning] Trạng thái kế tiếp chưa tự xác minh được; ` +
+                    `[Crawler] Trạng thái kế tiếp chưa tự xác minh được; ` +
                     `sẽ yêu cầu chọn phần tử ở step ${expectedState.stepNumber}.`,
                   );
                   readySnapshot = await captureSnapshot(
@@ -877,7 +877,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                   // prevents a manual browser click from silently making a bad
                   // Action Plan appear valid.
                   console.warn(
-                    `[Guided Learning] Trigger tự động của "${step.target}" không mở đúng danh sách; ` +
+                    `[Crawler] Trigger tự động của "${step.target}" không mở đúng danh sách; ` +
                     `cần chọn lại chính dropdown này.`,
                   );
                   await page.keyboard.press('Escape').catch(() => undefined);
