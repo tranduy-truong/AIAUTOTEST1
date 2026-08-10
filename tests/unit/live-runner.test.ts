@@ -3,6 +3,7 @@ import {
   buildCompactDomReport,
   CAPTURE_SNAPSHOT_SCRIPT,
   crawlerRunsHeadless,
+  describeStepForGuidance,
   guidedLearningEnabled,
   guidedPickScript,
   isPotentiallyDestructive,
@@ -85,6 +86,31 @@ describe('browser snapshot script', () => {
       scopeSelector: '#organization-drawer',
       selector: '[data-slot="select-item"][data-value="Tổ chức tôn giáo"]',
     });
+  });
+});
+
+describe('crawler guidance context', () => {
+  it('shows the test case, progress and step without exposing fill values', () => {
+    const description = describeStepForGuidance({
+      type: 'fill',
+      target: 'Nhập mật khẩu',
+      value: 'Secret@123',
+      raw: "- Nhập 'Secret@123' vào ô 'Nhập mật khẩu'",
+    });
+    const script = guidedPickScript('fill: Nhập mật khẩu', {
+      testCaseId: 'TC_18',
+      testCaseName: 'Đăng nhập quản trị',
+      testCasePosition: 18,
+      totalTestCases: 30,
+      stepNumber: 3,
+      totalSteps: 12,
+      stepDescription: description,
+    });
+
+    expect(script).toContain('TC_18 - Đăng nhập quản trị (18/30)');
+    expect(script).toContain('Bước: 3/12');
+    expect(script).toContain('Nhập dữ liệu vào ô');
+    expect(script).not.toContain('Secret@123');
   });
 });
 
