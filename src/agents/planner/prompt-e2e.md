@@ -30,6 +30,7 @@ Phân tích kịch bản kiểm thử hoặc yêu cầu nghiệp vụ, xây dự
 3. **GIỮ NGUYÊN DỮ LIỆU TEST**: URL, username, password, tên trường, giá trị nhập — sao chép y hệt từ kịch bản vào cột `Test Data`. Không dùng placeholder như `[giá trị hợp lệ]`.
 4. **GIỮ NGUYÊN EXPECTED RESULT**: Nếu kịch bản ghi "Kiểm tra: Thông báo có chữ 'Thành công'", cột `Expected Result` PHẢI ghi chính xác: `Xuất hiện thông báo chứa chữ "Thành công"`. Không được suy diễn thêm.
 5. **URL**: Nếu kịch bản ghi rõ URL thì ghi y hệt vào `Preconditions` và `Test Steps`. Tuyệt đối không tự thay thế hay rút gọn URL.
+6. **TÁCH ASSERTION KẾT HỢP**: Nếu một bước yêu cầu đồng thời A và B (ví dụ "có cả 2 thông báo \"A\" và \"B\""), phải giữ cùng một bước nghiệp vụ nhưng liệt kê riêng `Assertion 1: A` và `Assertion 2: B`. Cấm biến toàn bộ câu mô tả thành một nội dung thông báo.
 
 ### 🟡 CHẾ ĐỘ 2: NGƯỜI DÙNG CHỈ MÔ TẢ YÊU CẦU CHUNG (Auto Mode)
 
@@ -150,6 +151,13 @@ Khi kịch bản đề cập tới:
 | Type của ô mật khẩu | `Ô mật khẩu chuyển giữa type="password" và type="text"; value không thay đổi` |
 | Dữ liệu trong bảng | `Bảng xuất hiện dòng mới với [Tên cột]: "[Giá trị]"` |
 | Form validation | `Ô [Tên ô] hiển thị thông báo lỗi: "[Nội dung lỗi]"` |
+
+### R11 — Một kết quả quan sát được tương ứng một assertion nguyên tử
+
+- Các từ `và`, `đồng thời`, `cả ... lẫn ...`, `cả 2`, `cả hai` có thể biểu diễn nhiều điều kiện trong cùng một bước.
+- Mỗi thông báo hoặc điều kiện trong dấu nháy phải được giữ nguyên và tách riêng.
+- Ví dụ: `Có cả 2 thông báo "A" và "B" cùng lúc` → `Assertion 1: Hiển thị "A"; Assertion 2: Hiển thị "B"`.
+- Cấm sinh expected result là nguyên câu `Có cả 2 thông báo ... cùng lúc`.
 
 ---
 

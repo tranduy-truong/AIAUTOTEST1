@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { OpenAIAdapter } from "../../adapters/openai.js";
+import { parseScript } from "../../core/step-parser.js";
 //import { OllamaAdapter } from "../../adapters/ollama.js";
 
 // Lấy đường dẫn thư mục hiện tại của file run.ts
@@ -19,6 +20,28 @@ function parseJsonArray(rawOutput: string): unknown[] | null {
   } catch {
     return null;
   }
+}
+
+export function buildStructuredE2EPlan(script: string) {
+  return {
+    version: 1,
+    source: 'planner',
+    testCases: parseScript(script).map(testCase => ({
+      id: testCase.id,
+      name: testCase.name,
+      url: testCase.url,
+      steps: testCase.steps.map((step, index) => ({
+        stepIndex: index + 1,
+        type: step.type,
+        target: step.target,
+        value: step.value,
+        url: step.url,
+        raw: step.raw,
+        assertions: step.assertions,
+      })),
+      unparsedSteps: testCase.unparsedSteps,
+    })),
+  };
 }
 
 export async function runPlanner(
@@ -93,6 +116,14 @@ ${outputRequirement}
     if (level === 'e2e') {
       planPath = 'artifacts/test-plan-e2e.md';
       fs.writeFileSync(planPath, result.rawOutput.trim() + '\n');
+      if (fs.existsSync('artifacts/source-script-e2e.md')) {
+        const script = fs.readFileSync('artifacts/source-script-e2e.md', 'utf-8');
+        const structuredPlan = buildStructuredE2EPlan(script);
+        fs.writeFileSync(
+          'artifacts/test-plan-e2e.json',
+          JSON.stringify(structuredPlan, null, 2) + '\n',
+        );
+      }
     } else {
       const parsedPlan = parseJsonArray(result.rawOutput);
       if (!parsedPlan) {

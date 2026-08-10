@@ -6,6 +6,7 @@ import { TestPolicyHarness } from "./harness/policy.js";
 
 import { runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
+import { runHealer } from "./agents/healer/run.js";
 import { parseScript } from "./core/step-parser.js";
 import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
@@ -266,6 +267,7 @@ async function runTests(level) {
     console.log("Kích hoạt AI Diagnostics & Policy Harness...");
 
     const errorMessage = error.stdout || error.message;
+    await runHealer(level, String(errorMessage));
     const result = await harness.handleTestFailure(
       level,
       `Suite [${level}]`,

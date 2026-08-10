@@ -11,6 +11,7 @@
   "include": [
     "src/agents/crawler/live-runner.ts",
     "src/agents/generator/run.ts",
+    "src/agents/healer/run.ts",
     "src/agents/planner/run.ts",
     "src/core/action-plan.ts",
     "src/core/locator-resolver.ts",

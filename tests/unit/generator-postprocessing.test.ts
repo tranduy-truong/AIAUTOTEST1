@@ -87,6 +87,103 @@ describe('verified password toggle locators', () => {
   });
 });
 
+describe('Planner/Crawler contract enforcement', () => {
+  it('replaces a natural-language body assertion with all atomic Planner assertions', () => {
+    const actionPlan: ActionPlan = {
+      testCases: [{
+        id: 'TC_07',
+        name: 'Bỏ trống cả hai trường',
+        baseUrl: 'https://example.com/login',
+        needsLogin: false,
+        actions: [
+          {
+            stepIndex: 1,
+            type: 'goto',
+            description: 'Mở URL',
+            playwrightCode: "await page.goto('https://example.com/login', { waitUntil: 'domcontentloaded' });",
+            confidence: 'high',
+          },
+          {
+            stepIndex: 2,
+            type: 'click',
+            description: 'Bấm nút Đăng nhập',
+            playwrightCode: "await page.getByRole('button', { name: 'Đăng nhập' }).click();",
+            confidence: 'high',
+            matchedBy: 'role+name',
+          },
+          {
+            stepIndex: 3,
+            type: 'check',
+            description: 'Có cả 2 thông báo cùng lúc',
+            playwrightCode: [
+              "await expect(page.getByText('Vui lòng nhập tên đăng nhập', { exact: true })).toBeVisible();",
+              "await expect(page.getByText('Vui lòng nhập mật khẩu', { exact: true })).toBeVisible();",
+            ].join('\n'),
+            confidence: 'high',
+            matchedBy: 'structured_assertions',
+            assertions: [
+              { kind: 'text_visible', value: 'Vui lòng nhập tên đăng nhập' },
+              { kind: 'text_visible', value: 'Vui lòng nhập mật khẩu' },
+            ],
+          },
+        ],
+      }],
+    };
+    const generatedCode = [
+      "test('TC_LOGIN_07 - Bỏ trống cả 2 trường', async ({ page }) => {",
+      "  await page.goto(`${BASE_URL}/dang-nhap`);",
+      "  await page.getByRole('button', { name: 'Đăng nhập' }).click();",
+      "  await expect(page.locator('body')).toContainText('Có cả 2 thông báo A và B cùng lúc');",
+      '});',
+    ].join('\n');
+
+    const fixed = fixCommonPlaywrightIssues(generatedCode, actionPlan);
+
+    expect(fixed.match(/\.toBeVisible\(\)/g)).toHaveLength(2);
+    expect(fixed).toContain('Vui lòng nhập tên đăng nhập');
+    expect(fixed).toContain('Vui lòng nhập mật khẩu');
+    expect(fixed).not.toContain("locator('body')");
+    expect(fixed).not.toContain('Có cả 2 thông báo A và B');
+  });
+
+  it('marks a test fixme instead of compiling a low-confidence guessed locator', () => {
+    const actionPlan: ActionPlan = {
+      testCases: [{
+        id: 'TC_02',
+        name: 'Không đoán locator',
+        baseUrl: 'https://example.com',
+        needsLogin: false,
+        actions: [
+          {
+            stepIndex: 1,
+            type: 'goto',
+            description: 'Mở URL',
+            playwrightCode: "await page.goto('https://example.com');",
+            confidence: 'high',
+          },
+          {
+            stepIndex: 2,
+            type: 'click',
+            description: 'Click icon chưa biết',
+            playwrightCode: "await page.getByText('icon chưa biết').click();",
+            confidence: 'low',
+          },
+        ],
+      }],
+    };
+    const generatedCode = [
+      "test('TC_02 - Không đoán locator', async ({ page }) => {",
+      "  await page.locator('.guessed-icon').click();",
+      '});',
+    ].join('\n');
+
+    const fixed = fixCommonPlaywrightIssues(generatedCode, actionPlan);
+
+    expect(fixed).toContain("test.fixme(true, 'Bước 2 chưa được Planner/Crawler xác minh')");
+    expect(fixed).not.toContain('.guessed-icon');
+  });
+});
+
 describe('limitDomReport', () => {
   it('caps DOM evidence before building the Groq prompt', () => {
     const report = 'x'.repeat(20_000);

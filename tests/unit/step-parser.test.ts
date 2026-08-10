@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseScript } from '../../src/core/step-parser.js';
+import { parseAssertions, parseScript } from '../../src/core/step-parser.js';
 
 describe('parseScript', () => {
   it('keeps quoted values, annotations and unicode bullets', () => {
@@ -43,5 +43,26 @@ describe('parseScript', () => {
 
     expect(cases[0].steps).toEqual([]);
     expect(cases[0].unparsedSteps).toEqual(['- Kéo thả tệp vào vùng upload']);
+  });
+
+  it('splits compound Vietnamese messages into atomic assertions', () => {
+    const assertions = parseAssertions(
+      'Có cả 2 thông báo: " Vui lòng nhập tên đăng nhập" và " Vui lòng nhập mật khẩu" cùng lúc',
+    );
+
+    expect(assertions).toEqual([
+      { kind: 'text_visible', value: 'Vui lòng nhập tên đăng nhập' },
+      { kind: 'text_visible', value: 'Vui lòng nhập mật khẩu' },
+    ]);
+  });
+
+  it('accepts descriptive test case identifiers', () => {
+    const cases = parseScript([
+      'TC_LOGIN_07: Bỏ trống hai trường',
+      '- Kiểm tra: Có cả hai thông báo "Tên đăng nhập bắt buộc" và "Mật khẩu bắt buộc"',
+    ].join('\n'));
+
+    expect(cases[0].id).toBe('TC_LOGIN_07');
+    expect(cases[0].steps[0].assertions).toHaveLength(2);
   });
 });

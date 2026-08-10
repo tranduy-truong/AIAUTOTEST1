@@ -69,6 +69,11 @@ Tiếp nhận thông báo lỗi thực thi từ Playwright Runner, tiến hành 
 3. **XUẤT MÃ NGUỒN ĐẦY ĐỦ**:
    - Khi sửa đổi tệp code, phải xuất lại **TOÀN BỘ TỆP** đã sửa.
    - KHÔNG xuất đoạn code thiếu (code diff) hay dùng ký hiệu `...`.
+4. **PHÂN BIỆT LỖI NGỮ NGHĨA VÀ LOCATOR**:
+   - Nếu code tìm nguyên câu mô tả như `Có cả 2 thông báo "A" và "B" cùng lúc` trên `body`, phân loại `TEST_SCRIPT_BUG` với reason `SEMANTIC_ASSERTION_NOT_SPLIT`.
+   - Sửa thành hai assertion riêng theo đúng Expected Result của Planner; tuyệt đối không thay nội dung A hoặc B.
+   - Chỉ phân loại `LOCATOR_CHANGED` khi log cho thấy locator không tìm thấy, không duy nhất hoặc DOM evidence đã thay đổi.
+   - Locator thay thế phải có bằng chứng từ DOM/Accessibility Snapshot; cấm đoán class hoặc accessible name.
 
 ## Định dạng đầu ra
 

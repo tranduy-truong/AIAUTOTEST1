@@ -4,8 +4,16 @@ export interface ParsedStep {
   value?: string;        // Value to fill/select, e.g. "admin"
   url?: string;          // URL for goto steps
   assertion?: string;    // Assertion description for check steps
+  assertions?: ParsedAssertion[]; // Assertions split into atomic, machine-readable checks
   raw: string;           // Original line from script
 }
+
+export type ParsedAssertion =
+  | { kind: 'text_visible'; value: string }
+  | { kind: 'url_contains'; value: string }
+  | { kind: 'url_not_contains'; value: string }
+  | { kind: 'attribute'; target: 'password'; name: 'type'; value: 'password' | 'text' }
+  | { kind: 'unknown'; value: string };
 
 export interface ParsedTestCase {
   id: string;            // e.g. "TC_01"
@@ -16,6 +24,72 @@ export interface ParsedTestCase {
 }
 
 const STEP_BULLET = /^[-*•·▪◦–—]\s*/u;
+
+function normalizeVietnamese(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractQuotedLiterals(value: string): string[] {
+  const literals: string[] = [];
+  const pattern = /(["'])(.*?)\1/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value)) !== null) {
+    const literal = match[2].trim();
+    if (literal) literals.push(literal);
+  }
+
+  return literals;
+}
+
+/**
+ * Converts a natural-language expected result into atomic assertions.
+ * The LLM Planner still explains the plan, while this contract prevents the
+ * Generator from treating a compound sentence as one literal UI message.
+ */
+export function parseAssertions(value: string): ParsedAssertion[] {
+  const normalized = normalizeVietnamese(value);
+  const literals = extractQuotedLiterals(value);
+
+  if (normalized.includes('url khong con chua') || normalized.includes('url khong chua')) {
+    return [{ kind: 'url_not_contains', value: literals[0] || 'dang-nhap' }];
+  }
+  if (normalized.includes('url chua')) {
+    return [{ kind: 'url_contains', value: literals[0] || 'dang-nhap' }];
+  }
+  if (
+    normalized.includes('mat khau dang an') ||
+    normalized.includes('mat khau bi an') ||
+    normalized.includes('mat khau quay lai dang an')
+  ) {
+    return [{ kind: 'attribute', target: 'password', name: 'type', value: 'password' }];
+  }
+  if (
+    normalized.includes('mat khau dang van ban') ||
+    normalized.includes('mat khau chuyen sang dang van ban') ||
+    (normalized.includes('mat khau') && normalized.includes('doc duoc'))
+  ) {
+    return [{ kind: 'attribute', target: 'password', name: 'type', value: 'text' }];
+  }
+
+  const isVisibleTextAssertion = [
+    'thong bao',
+    'hien thi text',
+    'xuat hien',
+    'co chu',
+  ].some(keyword => normalized.includes(keyword));
+  if (isVisibleTextAssertion && literals.length > 0) {
+    return literals.map(literal => ({ kind: 'text_visible' as const, value: literal }));
+  }
+
+  return [{ kind: 'unknown', value: value.trim() }];
+}
 
 function stripOuterQuotes(value: string): string {
   let cleaned = value.trim().replace(/\s*\([^)]*\)\s*$/u, '').trim();
@@ -86,7 +160,7 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
     }
 
     // 2. Nhận diện Test Case Header (VD: TC_01: Đăng nhập thành công)
-    const tcMatch = line.match(/^(TC_\d+)\s*[:-]\s*(.*)$/i);
+    const tcMatch = line.match(/^(TC(?:_[A-Z0-9]+)+)\s*[:-]\s*(.*)$/i);
     if (tcMatch) {
       if (currentTC) {
         testCases.push(currentTC);
@@ -167,7 +241,13 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
     if (!step) {
       match = rawLine.match(/^Kiểm tra:\s*(.*)$/i);
       if (match) {
-        step = { type: 'check', assertion: match[1].trim(), raw: line };
+        const assertion = match[1].trim();
+        step = {
+          type: 'check',
+          assertion,
+          assertions: parseAssertions(assertion),
+          raw: line,
+        };
       }
     }
 

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { ParsedTestCase, ParsedStep } from './step-parser.js';
-import { DomSnapshot, ResolvedLocator, resolveLocator } from './locator-resolver.js';
+import { ParsedAssertion, ParsedTestCase, ParsedStep, parseAssertions } from './step-parser.js';
+import { DomSnapshot, resolveLocator } from './locator-resolver.js';
 
 export interface ResolvedAction {
   stepIndex: number;
@@ -11,6 +11,7 @@ export interface ResolvedAction {
   confidence: 'high' | 'medium' | 'low';
   matchedBy?: string;
   verifiedSelector?: string;
+  assertions?: ParsedAssertion[];
 }
 
 export interface ActionPlan {
@@ -82,10 +83,13 @@ export function buildActionPlan(
           break;
 
         case 'check': {
-          const checkRes = resolveLocator('check', step.assertion || '', currentSnapshot);
-          playwrightCode = checkRes.locator || '/* assertion error */';
-          confidence = checkRes.confidence || 'medium';
-          matchedBy = checkRes.matchedBy;
+          const assertions = step.assertions?.length
+            ? step.assertions
+            : parseAssertions(step.assertion || '');
+          const compiled = assertions.map(compileAssertion);
+          playwrightCode = compiled.map(result => result.code).join('\n');
+          confidence = compiled.some(result => result.confidence === 'low') ? 'low' : 'high';
+          matchedBy = confidence === 'high' ? 'structured_assertions' : 'unresolved_assertion';
           break;
         }
 
@@ -102,6 +106,9 @@ export function buildActionPlan(
         confidence,
         matchedBy,
         verifiedSelector,
+        assertions: step.type === 'check'
+          ? (step.assertions?.length ? step.assertions : parseAssertions(step.assertion || ''))
+          : undefined,
       });
     });
 
@@ -136,6 +143,45 @@ function escapeSingleQuoted(value: string): string {
     .replace(/'/g, "\\'")
     .replace(/\r/g, '\\r')
     .replace(/\n/g, '\\n');
+}
+
+function compileAssertion(assertion: ParsedAssertion): {
+  code: string;
+  confidence: 'high' | 'low';
+} {
+  const value = escapeSingleQuoted(assertion.value);
+
+  switch (assertion.kind) {
+    case 'text_visible':
+      return {
+        code: `await expect(page.getByText('${value}', { exact: true })).toBeVisible();`,
+        confidence: 'high',
+      };
+    case 'url_contains':
+      return {
+        code: `await expect(page).toHaveURL(/.*${escapeRegex(assertion.value)}.*/i);`,
+        confidence: 'high',
+      };
+    case 'url_not_contains':
+      return {
+        code: `await expect(page).not.toHaveURL(/.*${escapeRegex(assertion.value)}.*/i);`,
+        confidence: 'high',
+      };
+    case 'attribute':
+      return {
+        code: `await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', '${assertion.value}');`,
+        confidence: 'high',
+      };
+    case 'unknown':
+      return {
+        code: `test.fixme(true, 'Planner chưa hiểu assertion: ${value}');`,
+        confidence: 'low',
+      };
+  }
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\//g, '\\/');
 }
 
 /**

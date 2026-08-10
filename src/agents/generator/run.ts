@@ -53,6 +53,7 @@ function compactActionPlan(plan: ActionPlan): string {
         playwrightCode: action.playwrightCode,
         confidence: action.confidence,
         matchedBy: action.matchedBy,
+        assertions: action.assertions,
       })),
     })),
   }, null, 2);
@@ -78,6 +79,9 @@ export async function runGenerator(
   }
 
   const testPlan = fs.readFileSync(planPath, "utf-8");
+  const structuredPlannerPlan = level === 'e2e' && fs.existsSync('artifacts/test-plan-e2e.json')
+    ? fs.readFileSync('artifacts/test-plan-e2e.json', 'utf-8')
+    : '';
 
   let sourceScript = '';
   if (level === 'e2e' && fs.existsSync('artifacts/source-script-e2e.md')) {
@@ -127,6 +131,8 @@ Bạn là chuyên gia tự động hóa kiểm thử. Dựa vào bản Test Plan
 [TEST PLAN]:
 ${testPlan}
 ${crawledDomData}
+
+${structuredPlannerPlan ? `[TEST PLAN CÓ CẤU TRÚC DO PLANNER XUẤT RA - MỖI ASSERTION LÀ MỘT KIỂM TRA RIÊNG]:\n${structuredPlannerPlan}` : ''}
 
 ${verifiedActionPlan ? `[ACTION PLAN ĐÃ ĐƯỢC CRAWLER XÁC MINH - PLAYWRIGHT CODE TRONG TỪNG ACTION LÀ BẮT BUỘC]:\n${compactActionPlan(verifiedActionPlan)}` : ''}
 
@@ -279,6 +285,86 @@ test.describe('Product', () => {
 // ★ POST-PROCESSING ENGINE: Tự động sửa các lỗi phổ biến của AI
 //   trước khi ghi file — KHÔNG phụ thuộc vào LLM "nghe lời"
 // ═══════════════════════════════════════════════════════════════════
+function normalizedTestId(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function numericTestSuffix(value: string): string | undefined {
+  return value.match(/(\d+)$/)?.[1]?.replace(/^0+(?=\d)/, '');
+}
+
+function findPlannedTestCase(id: string, actionPlan: ActionPlan) {
+  const exact = actionPlan.testCases.find(testCase =>
+    normalizedTestId(testCase.id) === normalizedTestId(id),
+  );
+  if (exact) return exact;
+
+  const suffix = numericTestSuffix(id);
+  if (!suffix) return undefined;
+  const candidates = actionPlan.testCases.filter(testCase => numericTestSuffix(testCase.id) === suffix);
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/**
+ * Generator remains an Agent, but its free-form output may not override the
+ * Planner/Crawler contract. For complete E2E plans, rebuild each generated
+ * test body from verified actions while preserving the LLM-created suite/file
+ * structure and readable test title.
+ */
+export function enforceVerifiedActionPlan(
+  code: string,
+  actionPlan?: ActionPlan,
+): { code: string; changed: boolean } {
+  if (!actionPlan) return { code, changed: false };
+
+  const lines = code.split('\n');
+  let changed = false;
+
+  for (let start = 0; start < lines.length; start++) {
+    if (!/^\s*test\s*\(/.test(lines[start])) continue;
+    const generatedId = lines[start].match(/\bTC(?:_[A-Z0-9]+)+\b/i)?.[0];
+    if (!generatedId) continue;
+    const testCase = findPlannedTestCase(generatedId, actionPlan);
+    if (!testCase || testCase.actions.length === 0) continue;
+
+    // A complete script-mode Action Plan starts with navigation. Partial plans
+    // used by targeted post-processors must not erase unrelated generated code.
+    if (testCase.actions[0].type !== 'goto') continue;
+
+    const startIndent = lines[start].match(/^\s*/)?.[0] || '';
+    let end = start + 1;
+    for (; end < lines.length; end++) {
+      const indent = lines[end].match(/^\s*/)?.[0] || '';
+      if (indent === startIndent && /^\s*}\);\s*$/.test(lines[end])) break;
+    }
+    if (end >= lines.length) continue;
+
+    const bodyIndent = `${startIndent}  `;
+    const unresolved = testCase.actions.find(action => action.confidence === 'low');
+    const replacement: string[] = [];
+    if (unresolved) {
+      const reason = `Bước ${unresolved.stepIndex} chưa được Planner/Crawler xác minh`;
+      replacement.push(`${bodyIndent}test.fixme(true, '${reason}');`);
+    } else {
+      for (const action of testCase.actions) {
+        if (action.description) {
+          const description = action.description.replace(/^[-*•·▪◦–—]\s*/u, '').replace(/[\r\n]+/g, ' ');
+          replacement.push(`${bodyIndent}// ${description}`);
+        }
+        for (const actionLine of action.playwrightCode.split('\n')) {
+          if (actionLine.trim()) replacement.push(`${bodyIndent}${actionLine.trim()}`);
+        }
+      }
+    }
+
+    lines.splice(start + 1, end - start - 1, ...replacement);
+    changed = true;
+    start += replacement.length;
+  }
+
+  return { code: lines.join('\n'), changed };
+}
+
 function fixPasswordToggleAssertions(code: string): { code: string; changed: boolean } {
   const lines = code.split('\n');
   const testStarts = lines
@@ -427,6 +513,12 @@ export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan)
       .replace(/```/g, "")
       .trim();
     fixes.push("FIX-0: Dọn dẹp lời thoại rác & markdown code fences từ model");
+  }
+
+  const verifiedPlanResult = enforceVerifiedActionPlan(fixed, actionPlan);
+  if (verifiedPlanResult.changed) {
+    fixed = verifiedPlanResult.code;
+    fixes.push('FIX-14: Dựng lại test body từ Planner/Crawler Action Plan đã xác minh');
   }
 
   const passwordLocatorResult = fixPasswordToggleLocators(fixed, actionPlan);

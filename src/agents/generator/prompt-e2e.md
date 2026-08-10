@@ -61,7 +61,9 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
 13. **SINH CODE CHÍNH XÁC SỐ LƯỢNG TEST CASES (KHÔNG THÊM, KHÔNG BỚT)**:
    - Nếu trong kịch bản có đúng N test cases, bạn PHẢI viết đúng N khối `test('TC_...', ...)`.
    - **TUYỆT ĐỐI CẤM bỏ bớt**: Không cắt giảm test cases trong kịch bản.
-   - **TUYỆT ĐỐI CẤM tự thêm**: Không tự ý sinh thêm test cases ngoài kịch bản (ví dụ không tự thêm TC_02 "Đăng nhập thất bại" khi kịch bản chỉ có TC_01).
+    - **TUYỆT ĐỐI CẤM tự thêm**: Không tự ý sinh thêm test cases ngoài kịch bản (ví dụ không tự thêm TC_02 "Đăng nhập thất bại" khi kịch bản chỉ có TC_01).
+    - Nếu một bước có N assertion nguyên tử trong Test Plan có cấu trúc, PHẢI sinh đúng N dòng `await expect(...)`.
+    - CẤM dùng `page.locator('body').toContainText()` với nguyên câu mô tả như `Có cả 2 thông báo ... cùng lúc`.
 14. **QUY TAC ASSERTION CHO INPUT VA ICON (CUC KY QUAN TRONG)**:
    - **Input Fields (`getByPlaceholder`, `getByRole('textbox')`, `locator('input')`)**: `<input>` KHONG co textContent. BAT BUOC dung:
      - Kiem tra gia tri: `await expect(page.getByPlaceholder('...')).toHaveValue('gia_tri_chinh_xac_tu_kich_ban');`

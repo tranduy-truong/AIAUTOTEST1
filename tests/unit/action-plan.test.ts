@@ -53,4 +53,34 @@ describe('buildActionPlan', () => {
       verifiedSelector: 'button.password-toggle',
     });
   });
+
+  it('compiles every compound message as a separate exact assertion', () => {
+    const testCase: ParsedTestCase = {
+      id: 'TC_07',
+      name: 'Bỏ trống hai trường',
+      url: 'https://example.com/login',
+      unparsedSteps: [],
+      steps: [
+        { type: 'goto', url: 'https://example.com/login', raw: '- Mở URL' },
+        {
+          type: 'check',
+          assertion: 'Có cả 2 thông báo "Vui lòng nhập tên đăng nhập" và "Vui lòng nhập mật khẩu"',
+          assertions: [
+            { kind: 'text_visible', value: 'Vui lòng nhập tên đăng nhập' },
+            { kind: 'text_visible', value: 'Vui lòng nhập mật khẩu' },
+          ],
+          raw: '- Kiểm tra hai thông báo',
+        },
+      ],
+    };
+
+    const plan = buildActionPlan([testCase], new Map(), { persist: false });
+    const check = plan.testCases[0].actions[1];
+
+    expect(check.confidence).toBe('high');
+    expect(check.matchedBy).toBe('structured_assertions');
+    expect(check.playwrightCode).toContain("getByText('Vui lòng nhập tên đăng nhập', { exact: true })");
+    expect(check.playwrightCode).toContain("getByText('Vui lòng nhập mật khẩu', { exact: true })");
+    expect(check.playwrightCode).not.toContain("locator('body')");
+  });
 });
