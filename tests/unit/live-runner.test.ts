@@ -41,7 +41,8 @@ describe('browser snapshot script', () => {
 
   it('captures drawer scope and custom dropdown semantics', () => {
     document.body.innerHTML = `
-      <aside id="organization-drawer" role="dialog" aria-modal="true">
+      <aside id="organization-drawer" role="dialog" aria-modal="true" tabindex="-1">
+        <input id="organization-name" placeholder="Nhập tên tổ chức" />
         <div class="field">
           <label>Loại hình tổ chức</label>
           <button
@@ -51,14 +52,21 @@ describe('browser snapshot script', () => {
           >Chọn loại hình tổ chức</button>
         </div>
         <div role="listbox">
-          <div id="religious-option" role="option">Tổ chức tôn giáo</div>
+          <div data-slot="select-item" data-value="Tổ chức tôn giáo">Tổ chức tôn giáo</div>
         </div>
       </aside>
     `;
 
     const elements = window.eval(CAPTURE_SNAPSHOT_SCRIPT) as Array<Record<string, unknown>>;
+    const organizationName = elements.find(element => element.id === 'organization-name');
     const trigger = elements.find(element => element.id === 'organization-type');
-    const option = elements.find(element => element.id === 'religious-option');
+    const option = elements.find(element => element.dataValue === 'Tổ chức tôn giáo');
+
+    expect(organizationName).toMatchObject({
+      placeholder: 'Nhập tên tổ chức',
+      scopeSelector: '#organization-drawer',
+      selector: '#organization-name',
+    });
 
     expect(trigger).toMatchObject({
       role: 'combobox',
@@ -68,10 +76,11 @@ describe('browser snapshot script', () => {
       selector: '#organization-type',
     });
     expect(option).toMatchObject({
-      role: 'option',
+      dataSlot: 'select-item',
+      dataValue: 'Tổ chức tôn giáo',
       text: 'Tổ chức tôn giáo',
       scopeSelector: '#organization-drawer',
-      selector: '#religious-option',
+      selector: '[data-slot="select-item"][data-value="Tổ chức tôn giáo"]',
     });
   });
 });
