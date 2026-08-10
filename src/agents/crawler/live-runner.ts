@@ -383,9 +383,35 @@ export function protectedGotoAfterLogin(
   const target = normalizeActionText(current?.target || '');
   if (!['dang nhap', 'login', 'sign in'].includes(target)) return undefined;
 
-  const next = steps[currentIndex + 1];
+  let nextIndex = currentIndex + 1;
+  while (
+    nextIndex < steps.length &&
+    (steps[nextIndex].type === 'wait' || steps[nextIndex].type === 'check')
+  ) {
+    nextIndex++;
+  }
+
+  const next = steps[nextIndex];
   if (next?.type !== 'goto' || !next.url || isLoginUrl(next.url)) return undefined;
-  return { step: next, stepNumber: currentIndex + 2 };
+  return { step: next, stepNumber: nextIndex + 1 };
+}
+
+export function loginStepBeforeProtectedGoto(
+  steps: ParsedStep[],
+  gotoIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  let loginIndex = gotoIndex - 1;
+  while (
+    loginIndex >= 0 &&
+    (steps[loginIndex].type === 'wait' || steps[loginIndex].type === 'check')
+  ) {
+    loginIndex--;
+  }
+  if (loginIndex < 0) return undefined;
+
+  const protectedGoto = protectedGotoAfterLogin(steps, loginIndex);
+  if (protectedGoto?.stepNumber !== gotoIndex + 1) return undefined;
+  return { step: steps[loginIndex], stepNumber: loginIndex + 1 };
 }
 
 async function waitForAuthenticationTransition(
@@ -475,9 +501,9 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               await waitForStateSettled(page);
 
               const declaredAuthProbe = index > 0
-                ? protectedGotoAfterLogin(testCase.steps, index - 1)
+                ? loginStepBeforeProtectedGoto(testCase.steps, index)
                 : undefined;
-              if (declaredAuthProbe?.stepNumber === stepNumber && isLoginUrl(page.url())) {
+              if (declaredAuthProbe && isLoginUrl(page.url())) {
                 throw new Error(
                   `AUTHENTICATION_FAILED: website chuyen ve trang dang nhap khi mo ${step.url}`,
                 );
@@ -507,7 +533,9 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               const locator = await uniqueLocator(page, step, beforeAction);
               await locator.click({ timeout: 10000 });
               if (declaredAuthProbe) {
+                console.log(`[Live Runner]   Dang cho website xac nhan dang nhap tai step ${stepNumber}...`);
                 await waitForAuthenticationTransition(page, locator);
+                console.log(`[Live Runner]   Da xac nhan trang dang nhap ket thuc tai step ${stepNumber}.`);
               }
               await waitForStateSettled(page);
 
