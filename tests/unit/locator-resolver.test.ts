@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DomSnapshot, resolveLocator } from '../../src/core/locator-resolver.js';
 
 describe('resolveLocator', () => {
-  it('uses a user-verified Guided Learning binding before heuristic matching', () => {
+  it('uses a locator verified by the crawler before heuristic matching', () => {
     const snapshot: DomSnapshot = {
       url: 'https://example.com/to-chuc',
       afterStep: 'guided option',
