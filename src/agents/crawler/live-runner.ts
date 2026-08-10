@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { chromium, Browser, Locator, Page } from 'playwright';
 import { ParsedStep, ParsedTestCase } from '../../core/step-parser.js';
 import {
@@ -6,6 +8,170 @@ import {
   ResolvedLocator,
   resolveLocator,
 } from '../../core/locator-resolver.js';
+import {
+  findLearnedLocator,
+  forgetLearnedLocator,
+  loadLocatorRegistry,
+  LocatorRegistry,
+  rememberLearnedLocator,
+  saveLocatorRegistry,
+} from '../../core/locator-registry.js';
+
+interface GuidedChoice extends Partial<ElementInfo> {
+  selector: string;
+  tag: string;
+}
+
+interface LocatorRuntime {
+  registry: LocatorRegistry;
+  guided: boolean;
+}
+
+const GUIDED_RESULT_KEY = '__AI_TEST_GUIDED_PICK_RESULT__';
+
+export function guidedPickScript(instruction: string): string {
+  return String.raw`
+    (() => {
+      const resultKey = ${JSON.stringify(GUIDED_RESULT_KEY)};
+      globalThis[resultKey] = null;
+      const oldBanner = document.getElementById('__ai-test-guided-banner__');
+      if (oldBanner) oldBanner.remove();
+
+      const banner = document.createElement('div');
+      banner.id = '__ai-test-guided-banner__';
+      banner.textContent = ${JSON.stringify(`GUIDED LEARNING: Click đúng phần tử cho "${instruction}". Nhấn ESC để hủy.`)};
+      banner.style.cssText = [
+        'position:fixed', 'top:12px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:2147483647', 'background:#7f1d1d', 'color:white',
+        'padding:12px 18px', 'border-radius:8px', 'font:600 14px sans-serif',
+        'box-shadow:0 4px 20px rgba(0,0,0,.35)', 'max-width:80vw',
+      ].join(';');
+      document.documentElement.appendChild(banner);
+
+      function escapeCss(value) {
+        if (globalThis.CSS && typeof globalThis.CSS.escape === 'function') return globalThis.CSS.escape(value);
+        return String(value).replace(/[^a-zA-Z0-9_-]/g, function (character) { return '\\' + character; });
+      }
+
+      function escapeAttribute(value) {
+        return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      }
+
+      function unique(selector) {
+        try { return document.querySelectorAll(selector).length === 1; } catch { return false; }
+      }
+
+      function stableId(value) {
+        return value && !/base-ui|_r_|[a-f0-9]{10,}|^\d+$/i.test(value);
+      }
+
+      function selectorFor(element) {
+        const tag = element.tagName.toLowerCase();
+        const testId = element.getAttribute('data-testid');
+        if (testId) return '[data-testid="' + escapeAttribute(testId) + '"]';
+        if (stableId(element.id)) return '#' + escapeCss(element.id);
+
+        const placeholder = element.getAttribute('placeholder');
+        if (placeholder) {
+          const selector = tag + '[placeholder="' + escapeAttribute(placeholder) + '"]';
+          if (unique(selector)) return selector;
+        }
+
+        const name = element.getAttribute('name');
+        if (name) {
+          const selector = tag + '[name="' + escapeAttribute(name) + '"]';
+          if (unique(selector)) return selector;
+        }
+
+        const ariaLabel = element.getAttribute('aria-label');
+        if (ariaLabel) {
+          const selector = '[aria-label="' + escapeAttribute(ariaLabel) + '"]';
+          if (unique(selector)) return selector;
+        }
+
+        const dataSlot = element.getAttribute('data-slot');
+        const dataValue = element.getAttribute('data-value');
+        if (dataSlot && dataValue) {
+          const selector = '[data-slot="' + escapeAttribute(dataSlot) + '"][data-value="' + escapeAttribute(dataValue) + '"]';
+          if (unique(selector)) return selector;
+        }
+
+        const path = [];
+        let current = element;
+        while (current && current !== document.body && path.length < 8) {
+          if (stableId(current.id)) {
+            path.unshift('#' + escapeCss(current.id));
+            break;
+          }
+          const currentTag = current.tagName.toLowerCase();
+          const siblings = current.parentElement
+            ? Array.from(current.parentElement.children).filter(function (sibling) {
+                return sibling.tagName === current.tagName;
+              })
+            : [];
+          const position = siblings.length > 1
+            ? ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')'
+            : '';
+          path.unshift(currentTag + position);
+          current = current.parentElement;
+        }
+        return path.join(' > ');
+      }
+
+      function cleanup() {
+        document.removeEventListener('click', onClick, true);
+        document.removeEventListener('keydown', onKeyDown, true);
+        banner.remove();
+      }
+
+      function onKeyDown(event) {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        cleanup();
+        globalThis[resultKey] = { cancelled: true };
+      }
+
+      function onClick(event) {
+        if (banner.contains(event.target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
+        const clicked = event.target;
+        const element = clicked.closest(
+          'input, textarea, select, option, button, a[href], [role], [data-testid], [data-slot], [data-value], [contenteditable], [onclick], [tabindex]'
+        ) || clicked;
+        const selector = selectorFor(element);
+        const scope = element.closest('dialog, [role="dialog"], [aria-modal="true"], form, [data-slot="sheet-content"], [class*="drawer"], [class*="modal"]');
+        cleanup();
+        globalThis[resultKey] = {
+          cancelled: false,
+          selector,
+          tag: element.tagName.toLowerCase(),
+          type: element.type || undefined,
+          role: element.getAttribute('role') || undefined,
+          placeholder: element.getAttribute('placeholder') || undefined,
+          ariaLabel: element.getAttribute('aria-label') || undefined,
+          text: (element.textContent || '').trim().substring(0, 100),
+          testId: element.getAttribute('data-testid') || undefined,
+          dataSlot: element.getAttribute('data-slot') || undefined,
+          dataValue: element.getAttribute('data-value') || undefined,
+          id: element.id || undefined,
+          name: element.getAttribute('name') || undefined,
+          className: (element.getAttribute('class') || '').substring(0, 120) || undefined,
+          title: element.getAttribute('title') || undefined,
+          accessibleName: element.getAttribute('aria-label') || (element.textContent || '').trim().substring(0, 100) || undefined,
+          ariaHasPopup: element.getAttribute('aria-haspopup') || undefined,
+          scopeSelector: scope ? selectorFor(scope) : undefined,
+          isVisible: true,
+        };
+      }
+
+      document.addEventListener('click', onClick, true);
+      document.addEventListener('keydown', onKeyDown, true);
+    })()
+  `;
+}
 
 // Dùng chuỗi JavaScript thuần để đoạn code chạy trong browser không bị tsx/esbuild
 // chèn helper nội bộ (ví dụ __name) mà Playwright không thể serialize sang page.
@@ -13,7 +179,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
   (() => {
     const query = [
       'input', 'textarea', 'select', 'option', 'button', 'a[href]', 'label', 'svg', 'i',
-      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[title]',
+      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[data-slot]', '[data-value]', '[title]',
       '[onclick]', '[tabindex]',
     ].join(', ');
     const nodes = Array.from(document.querySelectorAll(query));
@@ -28,10 +194,20 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
     }
 
     function uniqueSelector(source) {
-      const interactive = source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
+      const isDirectTarget = source.matches('input, textarea, select, option, button, a[href], label, [role], [contenteditable], [data-testid], [data-slot], [data-value], [aria-label], [tabindex]');
+      const interactive = isDirectTarget
+        ? source
+        : source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
       const testId = interactive.getAttribute('data-testid');
       if (testId) return '[data-testid="' + escapeCss(testId) + '"]';
       if (interactive.id) return '#' + escapeCss(interactive.id);
+
+      const dataSlot = interactive.getAttribute('data-slot');
+      const dataValue = interactive.getAttribute('data-value');
+      if (dataSlot && dataValue) {
+        const selector = '[data-slot="' + dataSlot.replace(/"/g, '\\"') + '"][data-value="' + dataValue.replace(/"/g, '\\"') + '"]';
+        if (document.querySelectorAll(selector).length === 1) return selector;
+      }
 
       const ariaLabel = interactive.getAttribute('aria-label');
       if (ariaLabel) {
@@ -109,6 +285,8 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         ariaLabel: node.getAttribute('aria-label') || (interactive && interactive.getAttribute('aria-label')) || undefined,
         text: (node.textContent || '').trim().substring(0, 100),
         testId: node.getAttribute('data-testid') || (interactive && interactive.getAttribute('data-testid')) || undefined,
+        dataSlot: node.getAttribute('data-slot') || (interactive && interactive.getAttribute('data-slot')) || undefined,
+        dataValue: node.getAttribute('data-value') || (interactive && interactive.getAttribute('data-value')) || undefined,
         id: node.id || (interactive && interactive.id) || undefined,
         name: node.name || undefined,
         className: (node.getAttribute('class') || (interactive && interactive.getAttribute('class')) || '').substring(0, 120) || undefined,
@@ -187,6 +365,8 @@ export function buildCompactDomReport(
           element.ariaLabel,
           element.text,
           element.testId,
+          element.dataSlot,
+          element.dataValue,
           element.id,
           element.name,
           element.nearbyInputPlaceholder,
@@ -261,12 +441,98 @@ function locatorCandidates(page: Page, resolution: ResolvedLocator, target: stri
   }
 }
 
+function escapeSingleQuoted(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function annotateGuidedBinding(
+  snapshot: DomSnapshot,
+  stepType: string,
+  target: string,
+  selector: string,
+  metadata: Partial<ElementInfo> = {},
+): void {
+  const existing = snapshot.elements.find(element => element.selector === selector);
+  const binding: ElementInfo = existing || {
+    tag: metadata.tag || 'learned',
+    selector,
+    isVisible: true,
+  };
+  Object.assign(binding, metadata, {
+    selector,
+    isVisible: true,
+    learnedStepType: stepType,
+    learnedTarget: target,
+    learnedLocator: `page.locator('${escapeSingleQuoted(selector)}')`,
+  });
+  if (!existing) snapshot.elements.push(binding);
+}
+
+async function pickGuidedLocator(
+  page: Page,
+  stepType: string,
+  target: string,
+): Promise<GuidedChoice> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(
+      `[Guided Learning] Không xác minh được "${target}". ` +
+      `Hãy click đúng phần tử trên browser (lần ${attempt}/3, ESC để hủy).`,
+    );
+    await page.evaluate(guidedPickScript(`${stepType}: ${target}`));
+    await page.waitForFunction(
+      `globalThis[${JSON.stringify(GUIDED_RESULT_KEY)}] !== null`,
+      undefined,
+      { timeout: 120000 },
+    );
+    const result = await page.evaluate(
+      `globalThis[${JSON.stringify(GUIDED_RESULT_KEY)}]`,
+    ) as (GuidedChoice & { cancelled?: boolean }) | null;
+
+    if (!result || result.cancelled) {
+      throw new Error(`Guided Learning da huy cho "${target}"`);
+    }
+    if (!result.selector) continue;
+
+    const locator = page.locator(result.selector);
+    if (await locatorIsUniqueAndVisible(locator)) {
+      console.log(`[Guided Learning] Đã học selector cho "${target}": ${result.selector}`);
+      return result;
+    }
+    console.warn(`[Guided Learning] Selector chưa duy nhất/hiển thị, vui lòng chọn lại.`);
+  }
+
+  throw new Error(`Guided Learning khong tao duoc selector duy nhat cho "${target}"`);
+}
+
 async function uniqueLocatorFor(
   page: Page,
   stepType: string,
   target: string,
   snapshot: DomSnapshot,
+  runtime: LocatorRuntime,
+  context?: string,
 ): Promise<Locator> {
+  const learned = findLearnedLocator(
+    runtime.registry,
+    page.url(),
+    stepType,
+    target,
+    context,
+  );
+  if (learned) {
+    const learnedLocator = page.locator(learned.selector);
+    if (await locatorIsUniqueAndVisible(learnedLocator)) {
+      learned.lastVerifiedAt = new Date().toISOString();
+      annotateGuidedBinding(snapshot, stepType, target, learned.selector);
+      saveLocatorRegistry(runtime.registry);
+      console.log(`[Guided Learning] Dùng locator đã học cho "${target}".`);
+      return learnedLocator;
+    }
+    forgetLearnedLocator(runtime.registry, learned);
+    saveLocatorRegistry(runtime.registry);
+    console.warn(`[Guided Learning] Locator cũ của "${target}" đã hỏng; cần học lại.`);
+  }
+
   const resolution = resolveLocator(stepType, target, snapshot);
   const candidates = locatorCandidates(page, resolution, target);
 
@@ -279,11 +545,160 @@ async function uniqueLocatorFor(
     if (await candidate.count() === 1) return candidate;
   }
 
+  if (runtime.guided) {
+    const choice = await pickGuidedLocator(page, stepType, target);
+    rememberLearnedLocator(runtime.registry, {
+      pageUrl: page.url(),
+      stepType,
+      target,
+      context,
+      selector: choice.selector,
+    });
+    saveLocatorRegistry(runtime.registry);
+    annotateGuidedBinding(snapshot, stepType, target, choice.selector, choice);
+    return page.locator(choice.selector);
+  }
+
   throw new Error(`Khong tim thay locator duy nhat cho "${target}" (${resolution.matchedBy})`);
 }
 
-async function uniqueLocator(page: Page, step: ParsedStep, snapshot: DomSnapshot): Promise<Locator> {
-  return uniqueLocatorFor(page, step.type, step.target || '', snapshot);
+async function uniqueLocator(
+  page: Page,
+  step: ParsedStep,
+  snapshot: DomSnapshot,
+  runtime: LocatorRuntime,
+): Promise<Locator> {
+  return uniqueLocatorFor(page, step.type, step.target || '', snapshot, runtime);
+}
+
+async function locatorIsUniqueAndVisible(locator: Locator): Promise<boolean> {
+  try {
+    return await locator.count() === 1 && await locator.isVisible();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for a state-specific control instead of assuming that network-idle means
+ * a React drawer, dialog, or portal has finished rendering. The returned
+ * snapshot is real DOM evidence and is never used as a guessed locator.
+ */
+async function waitForVerifiedTarget(
+  page: Page,
+  stepType: ParsedStep['type'] | 'option',
+  target: string,
+  afterStep: string,
+  timeout = 8000,
+): Promise<DomSnapshot> {
+  const deadline = Date.now() + timeout;
+  let latestSnapshot = await captureSnapshot(page, afterStep);
+
+  while (Date.now() <= deadline) {
+    const resolution = resolveLocator(stepType, target, latestSnapshot);
+    if (resolution.confidence !== 'low') {
+      const candidates = locatorCandidates(page, resolution, target);
+      for (const candidate of candidates) {
+        if (await locatorIsUniqueAndVisible(candidate)) return latestSnapshot;
+      }
+    }
+
+    await page.waitForTimeout(200);
+    latestSnapshot = await captureSnapshot(page, afterStep);
+  }
+
+  const resolution = resolveLocator(stepType, target, latestSnapshot);
+  throw new Error(
+    `Trang thai moi khong hien thi locator duy nhat cho "${target}" (${resolution.matchedBy})`,
+  );
+}
+
+export function nextStateStep(
+  steps: ParsedStep[],
+  currentIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  for (let index = currentIndex + 1; index < steps.length; index++) {
+    const step = steps[index];
+    if (step.type === 'goto' || step.type === 'check' || step.type === 'wait') return undefined;
+    if (step.target) return { step, stepNumber: index + 1 };
+  }
+  return undefined;
+}
+
+function normalizeActionText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+export function isLoginUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname;
+    return /(?:^|\/)(?:dang-nhap|login|sign-in)(?:\/|$)/i.test(pathname);
+  } catch {
+    return /(?:dang-nhap|login|sign-in)/i.test(value);
+  }
+}
+
+export function protectedGotoAfterLogin(
+  steps: ParsedStep[],
+  currentIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  const current = steps[currentIndex];
+  const target = normalizeActionText(current?.target || '');
+  if (!['dang nhap', 'login', 'sign in'].includes(target)) return undefined;
+
+  let nextIndex = currentIndex + 1;
+  while (
+    nextIndex < steps.length &&
+    (steps[nextIndex].type === 'wait' || steps[nextIndex].type === 'check')
+  ) {
+    nextIndex++;
+  }
+
+  const next = steps[nextIndex];
+  if (next?.type !== 'goto' || !next.url || isLoginUrl(next.url)) return undefined;
+  return { step: next, stepNumber: nextIndex + 1 };
+}
+
+export function loginStepBeforeProtectedGoto(
+  steps: ParsedStep[],
+  gotoIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  let loginIndex = gotoIndex - 1;
+  while (
+    loginIndex >= 0 &&
+    (steps[loginIndex].type === 'wait' || steps[loginIndex].type === 'check')
+  ) {
+    loginIndex--;
+  }
+  if (loginIndex < 0) return undefined;
+
+  const protectedGoto = protectedGotoAfterLogin(steps, loginIndex);
+  if (protectedGoto?.stepNumber !== gotoIndex + 1) return undefined;
+  return { step: steps[loginIndex], stepNumber: loginIndex + 1 };
+}
+
+async function waitForAuthenticationTransition(
+  page: Page,
+  loginControl: Locator,
+  timeout = 15000,
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() <= deadline) {
+    if (!isLoginUrl(page.url())) return;
+    if (!await loginControl.isVisible().catch(() => false)) return;
+    await page.waitForTimeout(200);
+  }
+
+  throw new Error(
+    'AUTHENTICATION_FAILED: URL van o trang dang nhap va form dang nhap van hien thi',
+  );
 }
 
 async function waitForStateSettled(page: Page): Promise<void> {
@@ -296,26 +711,65 @@ async function waitForStateSettled(page: Page): Promise<void> {
   await waitForInteractiveDom(page);
 }
 
-function isPotentiallyDestructive(target: string): boolean {
+export function isPotentiallyDestructive(target: string): boolean {
   return /(xóa|xoá|delete|remove|thanh toán|payment|đặt hàng|place order|lưu|save|gửi|send)/iu.test(target);
+}
+
+export interface CrawlerFailure {
+  testCaseId: string;
+  stepNumber: number;
+  step: string;
+  currentUrl: string;
+  reason: string;
+}
+
+export function crawlerRunsHeadless(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return String(env.E2E_CRAWLER_HEADLESS ?? 'true').toLowerCase() !== 'false';
+}
+
+export function guidedLearningEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return String(env.E2E_GUIDED_LEARNING ?? 'true').toLowerCase() !== 'false';
+}
+
+function writeCrawlerFailures(failures: CrawlerFailure[]): void {
+  const artifactsDir = path.join(process.cwd(), 'artifacts');
+  if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(artifactsDir, 'crawler-failures.json'),
+    JSON.stringify(failures, null, 2) + '\n',
+    'utf-8',
+  );
 }
 
 export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, DomSnapshot[]>> {
   const snapshotsMap = new Map<string, DomSnapshot[]>();
+  const failures: CrawlerFailure[] = [];
+  const registry = loadLocatorRegistry();
+  const guided = guidedLearningEnabled();
+  const runtime: LocatorRuntime = { registry, guided };
   let browser: Browser | null = null;
 
   try {
-    browser = await chromium.launch({ headless: true });
+    const headless = guided ? false : crawlerRunsHeadless();
+    console.log(`[Live Runner] Guided Learning: ${guided ? 'bat' : 'tat'}`);
+    console.log(`[Live Runner] Che do trinh duyet: ${headless ? 'headless' : 'headed'}`);
+    browser = await chromium.launch({ headless });
 
     for (const testCase of testCases) {
       console.log(`[Live Runner] Dang thu thap DOM cho ${testCase.id}...`);
       const snapshots: DomSnapshot[] = [];
+      let abortRemainingSteps = false;
       // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
       const context = await browser.newContext();
       const page = await context.newPage();
 
       try {
         for (let index = 0; index < testCase.steps.length; index++) {
+          if (abortRemainingSteps) break;
           const step = testCase.steps[index];
           const stepNumber = index + 1;
 
@@ -323,7 +777,17 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
             if (step.type === 'goto') {
               if (!step.url) throw new Error('Buoc goto khong co URL');
               await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
-              await waitForInteractiveDom(page);
+              await waitForStateSettled(page);
+
+              const declaredAuthProbe = index > 0
+                ? loginStepBeforeProtectedGoto(testCase.steps, index)
+                : undefined;
+              if (declaredAuthProbe && isLoginUrl(page.url())) {
+                throw new Error(
+                  `AUTHENTICATION_FAILED: website chuyen ve trang dang nhap khi mo ${step.url}`,
+                );
+              }
+
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
               continue;
             }
@@ -333,33 +797,80 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
             snapshots.push(beforeAction);
 
             if (step.type === 'fill') {
-              const locator = await uniqueLocator(page, step, beforeAction);
+              const locator = await uniqueLocator(page, step, beforeAction, runtime);
               await locator.fill(step.value || '', { timeout: 10000 });
             } else if (step.type === 'click') {
               if (isPotentiallyDestructive(step.target || '')) {
-                console.warn(`[Live Runner]   SKIP step ${stepNumber}: hanh dong co the thay doi du lieu`);
+                // Resolve the locator from the current DOM but never execute the
+                // destructive action. ActionPlan can therefore generate the
+                // verified click without the Crawler mutating production data.
+                await uniqueLocator(page, step, beforeAction, runtime);
+                console.warn(`[Live Runner]   VERIFY-ONLY step ${stepNumber}: khong thuc thi hanh dong thay doi du lieu`);
                 continue;
               }
-              const locator = await uniqueLocator(page, step, beforeAction);
+              const declaredAuthProbe = protectedGotoAfterLogin(testCase.steps, index);
+              const locator = await uniqueLocator(page, step, beforeAction, runtime);
               await locator.click({ timeout: 10000 });
+              if (declaredAuthProbe) {
+                console.log(`[Live Runner]   Dang cho website xac nhan dang nhap tai step ${stepNumber}...`);
+                await waitForAuthenticationTransition(page, locator);
+                console.log(`[Live Runner]   Da xac nhan trang dang nhap ket thuc tai step ${stepNumber}.`);
+              }
               await waitForStateSettled(page);
+
+              const expectedState = nextStateStep(testCase.steps, index);
+              if (expectedState) {
+                let readySnapshot: DomSnapshot;
+                try {
+                  readySnapshot = await waitForVerifiedTarget(
+                    page,
+                    expectedState.step.type,
+                    expectedState.step.target || '',
+                    `ready for step ${expectedState.stepNumber}: ${expectedState.step.raw}`,
+                  );
+                } catch (error) {
+                  if (!guided) throw error;
+                  console.warn(
+                    `[Guided Learning] Trạng thái kế tiếp chưa tự xác minh được; ` +
+                    `sẽ yêu cầu chọn phần tử ở step ${expectedState.stepNumber}.`,
+                  );
+                  readySnapshot = await captureSnapshot(
+                    page,
+                    `ready for guided step ${expectedState.stepNumber}: ${expectedState.step.raw}`,
+                  );
+                }
+                snapshots.push(readySnapshot);
+              }
             } else if (step.type === 'select') {
-              const locator = await uniqueLocator(page, step, beforeAction);
+              const locator = await uniqueLocator(page, step, beforeAction, runtime);
               if (await locator.evaluate(element => element.tagName.toLowerCase() === 'select')) {
                 await locator.selectOption({ label: step.value });
               } else {
                 await locator.click({ timeout: 10000 });
                 await waitForStateSettled(page);
-                const optionSnapshot = await captureSnapshot(
-                  page,
-                  `during step ${stepNumber}: options for ${step.raw}`,
-                );
+                let optionSnapshot: DomSnapshot;
+                try {
+                  optionSnapshot = await waitForVerifiedTarget(
+                    page,
+                    'option',
+                    step.value || '',
+                    `during step ${stepNumber}: options for ${step.raw}`,
+                  );
+                } catch (error) {
+                  if (!guided) throw error;
+                  optionSnapshot = await captureSnapshot(
+                    page,
+                    `during step ${stepNumber}: guided options for ${step.raw}`,
+                  );
+                }
                 snapshots.push(optionSnapshot);
                 const option = await uniqueLocatorFor(
                   page,
                   'option',
                   step.value || '',
                   optionSnapshot,
+                  runtime,
+                  step.target,
                 );
                 await option.click({ timeout: 10000 });
                 await waitForStateSettled(page);
@@ -372,7 +883,19 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
             }
           } catch (error) {
-            console.warn(`[Live Runner]   WARNING step ${stepNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            const reason = error instanceof Error ? error.message : 'Unknown error';
+            failures.push({
+              testCaseId: testCase.id,
+              stepNumber,
+              step: step.raw,
+              currentUrl: page.url(),
+              reason,
+            });
+            console.warn(`[Live Runner]   WARNING step ${stepNumber}: ${reason} (URL: ${page.url()})`);
+            if (reason.startsWith('AUTHENTICATION_FAILED:')) {
+              abortRemainingSteps = true;
+              console.warn('[Live Runner]   STOP test case: cac buoc sau can phien dang nhap hop le');
+            }
           }
         }
       } finally {
@@ -382,6 +905,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
     }
   } finally {
     if (browser) await browser.close();
+    writeCrawlerFailures(failures);
   }
 
   return snapshotsMap;
