@@ -86,10 +86,16 @@ export function buildActionPlan(
       let confidence: 'high' | 'medium' | 'low' = 'high';
       let matchedBy: string | undefined;
       let verifiedSelector: string | undefined;
-      const currentSnapshot = snapshots.find(snapshot =>
-        snapshot.afterStep.startsWith(`before step ${stepIndex}:`) ||
+      const beforeSnapshot = snapshots.find(snapshot =>
+        snapshot.afterStep.startsWith(`before step ${stepIndex}:`),
+      );
+      const afterSnapshot = snapshots.find(snapshot =>
         snapshot.afterStep.startsWith(`after step ${stepIndex}:`),
-      ) || snapshots
+      );
+      const duringSnapshot = snapshots.find(snapshot =>
+        snapshot.afterStep.startsWith(`during step ${stepIndex}:`),
+      );
+      const currentSnapshot = beforeSnapshot || afterSnapshot || snapshots
         .filter(snapshot => {
           const match = snapshot.afterStep.match(/(?:before|after) step (\d+):/);
           return match ? Number(match[1]) < stepIndex : false;
@@ -124,18 +130,45 @@ export function buildActionPlan(
             sharedSnapshots,
           );
           playwrightCode = `await ${clickRes.locator || 'page.locator("unknown")'}.click();`;
+          if (
+            beforeSnapshot &&
+            afterSnapshot &&
+            normalizedPageUrl(beforeSnapshot.url) !== normalizedPageUrl(afterSnapshot.url)
+          ) {
+            playwrightCode += `\nawait page.waitForURL('${escapeSingleQuoted(afterSnapshot.url)}', { waitUntil: 'domcontentloaded' });`;
+          }
           confidence = clickRes.confidence || 'medium';
           matchedBy = clickRes.matchedBy;
           verifiedSelector = clickRes.element?.selector;
           break;
         }
 
-        case 'select':
-          const safeSelectTarget = (step.target || '').replace(/'/g, "\\'");
-          const safeSelectValue = (step.value || '').replace(/'/g, "\\'");
-          playwrightCode = `await page.getByText('${safeSelectTarget}').or(page.getByRole('combobox', { name: '${safeSelectTarget}' })).first().click();\nawait page.getByRole('option', { name: '${safeSelectValue}' }).first().click();`;
-          confidence = 'medium';
+        case 'select': {
+          const triggerRes = resolveWithSharedEvidence(
+            step,
+            currentSnapshot,
+            testCase.url || '',
+            sharedSnapshots,
+          );
+          verifiedSelector = triggerRes.element?.selector;
+
+          if (triggerRes.element?.tag === 'select') {
+            playwrightCode = `await ${triggerRes.locator}.selectOption({ label: '${escapeSingleQuoted(step.value || '')}' });`;
+            confidence = triggerRes.confidence;
+            matchedBy = triggerRes.matchedBy;
+            break;
+          }
+
+          const optionRes = resolveLocator('option', step.value || '', duringSnapshot);
+          playwrightCode = `await ${triggerRes.locator}.click();\nawait ${optionRes.locator}.click();`;
+          confidence = triggerRes.confidence === 'low' || optionRes.confidence === 'low'
+            ? 'low'
+            : triggerRes.confidence === 'medium' || optionRes.confidence === 'medium'
+              ? 'medium'
+              : 'high';
+          matchedBy = `${triggerRes.matchedBy}+${optionRes.matchedBy}`;
           break;
+        }
 
         case 'check': {
           const assertions = step.assertions?.length
