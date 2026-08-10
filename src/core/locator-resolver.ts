@@ -9,6 +9,10 @@ export interface ElementInfo {
   id?: string;
   name?: string;
   className?: string;
+  title?: string;
+  accessibleName?: string;
+  nearbyInputPlaceholder?: string;
+  selector?: string;
   isVisible: boolean;
 }
 
@@ -22,6 +26,7 @@ export interface ResolvedLocator {
   locator: string;          // e.g. "page.getByPlaceholder('Nhập tên đăng nhập')"
   confidence: 'high' | 'medium' | 'low';
   matchedBy: string;        // e.g. "placeholder", "role+name", "text"
+  element?: ElementInfo;    // DOM evidence used to create this locator
 }
 
 /**
@@ -36,6 +41,48 @@ function normalizeText(text: string): string {
     .toLowerCase()
     .trim()
     .replace(/^['"]|['"]$/g, ''); // Bỏ dấu nháy ở đầu và cuối nếu có
+}
+
+function findIconElement(target: string, elements: ElementInfo[]): ElementInfo | undefined {
+  let keywords: string[] = [];
+  let needsPasswordNeighbor = false;
+
+  if (target.includes('con mat') || target.includes('eye') || target.includes('mat khau')) {
+    keywords = ['eye', 'password', 'mat khau', 'hien mat khau', 'an mat khau', 'toggle password'];
+    needsPasswordNeighbor = true;
+  } else if (target.includes('chinh sua') || target.includes('sua') || target.includes('edit') || target.includes('pencil')) {
+    keywords = ['chinh sua', 'sua', 'edit', 'pencil'];
+  } else if (target.includes('xoa') || target.includes('delete') || target.includes('trash')) {
+    keywords = ['xoa', 'delete', 'trash'];
+  } else if (target.includes('them') || target.includes('add') || target.includes('plus')) {
+    keywords = ['them', 'add', 'plus'];
+  }
+
+  if (keywords.length === 0) return undefined;
+
+  const scored = elements
+    .filter(el => el.isVisible && el.selector)
+    .map(el => {
+      const semanticText = normalizeText([
+        el.accessibleName,
+        el.ariaLabel,
+        el.title,
+        el.testId,
+        el.id,
+        el.className,
+        el.text,
+      ].filter(Boolean).join(' '));
+      const nearbyInput = normalizeText(el.nearbyInputPlaceholder || '');
+      let score = keywords.reduce((total, keyword) => total + (semanticText.includes(keyword) ? 3 : 0), 0);
+      if (needsPasswordNeighbor && nearbyInput.includes('mat khau')) score += 5;
+      if (el.tag === 'button' || el.role === 'button') score += 2;
+      if (el.tag === 'svg' || el.tag === 'i') score += 1;
+      return { el, score };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return scored[0]?.el;
 }
 
 /**
@@ -61,7 +108,8 @@ export function resolveLocator(
       return {
         locator: `page.getByPlaceholder('${byPlaceholder.placeholder}')`,
         confidence: 'high',
-        matchedBy: 'placeholder'
+        matchedBy: 'placeholder',
+        element: byPlaceholder
       };
     }
 
@@ -71,7 +119,8 @@ export function resolveLocator(
       return {
         locator: `page.getByLabel('${byAriaLabel.ariaLabel}')`,
         confidence: 'high',
-        matchedBy: 'ariaLabel'
+        matchedBy: 'ariaLabel',
+        element: byAriaLabel
       };
     }
 
@@ -81,7 +130,8 @@ export function resolveLocator(
       return {
         locator: `page.locator('[name="${byName.name}"]')`,
         confidence: 'medium',
-        matchedBy: 'name'
+        matchedBy: 'name',
+        element: byName
       };
     }
 
@@ -91,7 +141,8 @@ export function resolveLocator(
       return {
         locator: `page.locator('#${byId.id}')`,
         confidence: 'medium',
-        matchedBy: 'id'
+        matchedBy: 'id',
+        element: byId
       };
     }
 
@@ -118,33 +169,22 @@ export function resolveLocator(
       return {
         locator: `page.getByRole('${role}', { name: '${safeName}' })`,
         confidence: 'high',
-        matchedBy: 'role+name'
+        matchedBy: 'role+name',
+        element: byText
       };
     }
 
-    // b. Xử lý các icon đặc biệt (độ tin cậy trung bình)
-    if (target.includes('icon') || target.includes('con mat') || target.includes('sua') || target.includes('xoa') || target.includes('them')) {
-      if (target.includes('con mat') || target.includes('eye')) {
-        return {
-          locator: `page.locator('.lucide-eye, .lucide-eye-off, [class*="eye"]').first()`,
-          confidence: 'medium',
-          matchedBy: 'icon_class'
-        };
-      }
-      if (target.includes('sua') || target.includes('edit')) {
-        return {
-          locator: `page.locator('.lucide-pencil, [class*="edit"]').first()`,
-          confidence: 'medium',
-          matchedBy: 'icon_class'
-        };
-      }
-      if (target.includes('xoa') || target.includes('delete') || target.includes('trash')) {
-        return {
-          locator: `page.locator('.lucide-trash, [class*="delete"]').first()`,
-          confidence: 'medium',
-          matchedBy: 'icon_class'
-        };
-      }
+    // b. Icon chỉ được resolve khi snapshot DOM cung cấp bằng chứng thực tế.
+    const iconElement = findIconElement(target, elements);
+    if (iconElement?.selector) {
+      const safeSelector = iconElement.selector.replace(/'/g, "\\'");
+      const hasAccessibleEvidence = Boolean(iconElement.ariaLabel || iconElement.accessibleName || iconElement.testId);
+      return {
+        locator: `page.locator('${safeSelector}')`,
+        confidence: hasAccessibleEvidence ? 'high' : 'medium',
+        matchedBy: 'dom_icon_metadata',
+        element: iconElement
+      };
     }
 
     // c. Tìm theo ariaLabel (độ tin cậy trung bình)
@@ -154,7 +194,8 @@ export function resolveLocator(
       return {
         locator: `page.getByLabel('${safeLabel}')`,
         confidence: 'medium',
-        matchedBy: 'ariaLabel'
+        matchedBy: 'ariaLabel',
+        element: byAriaLabel
       };
     }
 
@@ -165,7 +206,8 @@ export function resolveLocator(
       return {
         locator: `page.getByRole('link', { name: '${safeName}' })`,
         confidence: 'medium',
-        matchedBy: 'link_name'
+        matchedBy: 'link_name',
+        element: linkByText
       };
     }
 
@@ -188,7 +230,8 @@ export function resolveLocator(
       return {
         locator: `page.getByLabel('${safeLabel}')`,
         confidence: 'high',
-        matchedBy: 'ariaLabel'
+        matchedBy: 'ariaLabel',
+        element: byAriaLabel
       };
     }
 
@@ -199,7 +242,8 @@ export function resolveLocator(
       return {
         locator: `page.getByText('${safeText}').first()`,
         confidence: 'medium',
-        matchedBy: 'text'
+        matchedBy: 'text',
+        element: byLabelText
       };
     }
 

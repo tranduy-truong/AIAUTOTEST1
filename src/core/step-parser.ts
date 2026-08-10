@@ -12,6 +12,54 @@ export interface ParsedTestCase {
   name: string;          // e.g. "Đăng nhập thành công"
   url?: string;          // URL extracted from TC header or first goto step
   steps: ParsedStep[];
+  unparsedSteps: string[]; // Step-like lines that need user/Planner review
+}
+
+const STEP_BULLET = /^[-*•·▪◦–—]\s*/u;
+
+function stripOuterQuotes(value: string): string {
+  let cleaned = value.trim().replace(/\s*\([^)]*\)\s*$/u, '').trim();
+  const first = cleaned[0];
+  const last = cleaned[cleaned.length - 1];
+
+  if ((first === "'" || first === '"') && last === first) {
+    // Preserve intentional whitespace inside quotes (for trim/whitespace tests).
+    return cleaned.slice(1, -1);
+  }
+
+  // Handle imperfect human input such as: 'admin'1 or ' OR '1'='1.
+  if (first === "'" || first === '"') cleaned = cleaned.slice(1).trim();
+  if (/^OR\s+'?1'?\s*=\s*'?1'?$/iu.test(cleaned)) {
+    return "OR '1'='1";
+  }
+  const singleQuoteCount = (cleaned.match(/'/g) || []).length;
+  const doubleQuoteCount = (cleaned.match(/"/g) || []).length;
+  if (singleQuoteCount % 2 !== 0) cleaned = cleaned.replace(/'/g, '');
+  if (doubleQuoteCount % 2 !== 0) cleaned = cleaned.replace(/"/g, '');
+  return cleaned.trim();
+}
+
+function parseFillStep(rawLine: string, originalLine: string): ParsedStep | null {
+  if (!/^Nhập\s+/iu.test(rawLine)) return null;
+
+  const targetMatch = rawLine.match(/\s+vào\s+(ô|trường|label)\s+(['"])(.*?)\2(?:\s*\([^)]*\))?\s*$/iu);
+  if (targetMatch?.index !== undefined) {
+    const valuePart = rawLine.slice(rawLine.search(/^Nhập\s+/iu) + 'Nhập'.length, targetMatch.index);
+    const value = stripOuterQuotes(valuePart);
+    if (value) {
+      return { type: 'fill', value, target: targetMatch[3].trim(), raw: originalLine };
+    }
+  }
+
+  const reverseMatch = rawLine.match(/^Nhập\s+vào\s+(?:ô|trường|label)\s+(['"])(.*?)\1\s+là\s+(.+)$/iu);
+  if (reverseMatch) {
+    const value = stripOuterQuotes(reverseMatch[3]);
+    if (value) {
+      return { type: 'fill', target: reverseMatch[2].trim(), value, raw: originalLine };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -47,7 +95,8 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
         id: tcMatch[1].trim(),
         name: tcMatch[2].trim(),
         url: globalUrl, // Dùng URL toàn cục làm URL mặc định cho TC
-        steps: []
+        steps: [],
+        unparsedSteps: []
       };
       continue;
     }
@@ -55,7 +104,8 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
     if (!currentTC) continue;
 
     // Loại bỏ dấu "-" hoặc "*" ở đầu các dòng bước (step)
-    const rawLine = line.replace(/^[-*]\s*/, '').trim();
+    const hasStepBullet = STEP_BULLET.test(line);
+    const rawLine = line.replace(STEP_BULLET, '').trim();
 
     // 3. Bỏ qua các bước yêu cầu để trống ô nhập liệu
     if (/bỏ trống/i.test(rawLine)) {
@@ -75,20 +125,10 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
       step = { type: 'goto', url: stepUrl, raw: line };
     }
 
-    // 5. Nhận diện bước "Nhập" dữ liệu
-    // Mẫu 1: Nhập 'X' vào ô 'Y'
+    // 5. Nhận diện bước "Nhập" dữ liệu, kể cả giá trị chứa dấu nháy
+    // hoặc có chú thích trong ngoặc giữa giá trị và tên ô.
     if (!step) {
-      match = rawLine.match(/^Nhập\s+['"]([^'"]+)['"]\s+vào\s+ô\s+['"]([^'"]+)['"]/i);
-      if (match) {
-        step = { type: 'fill', value: match[1], target: match[2], raw: line };
-      }
-    }
-    // Mẫu 2: Nhập vào ô 'Y' là 'X'
-    if (!step) {
-      match = rawLine.match(/^Nhập\s+vào\s+ô\s+['"]([^'"]+)['"]\s+là\s+['"]([^'"]+)['"]/i);
-      if (match) {
-        step = { type: 'fill', target: match[1], value: match[2], raw: line };
-      }
+      step = parseFillStep(rawLine, line);
     }
 
     // 6. Nhận diện bước "Click / Bấm"
@@ -141,6 +181,8 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
     // Thêm bước vào test case hiện tại nếu nhận diện thành công
     if (step) {
       currentTC.steps.push(step);
+    } else if (hasStepBullet) {
+      currentTC.unparsedSteps.push(line);
     }
   }
 

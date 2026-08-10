@@ -7,6 +7,20 @@ import { OpenAIAdapter } from "../../adapters/openai.js";
 // Lấy đường dẫn thư mục hiện tại của file run.ts
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function parseJsonArray(rawOutput: string): unknown[] | null {
+  const withoutFence = rawOutput
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  try {
+    const parsed = JSON.parse(withoutFence);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runPlanner(
   level: "unit" | "integration" | "e2e",
   contextData: string,
@@ -29,6 +43,10 @@ export async function runPlanner(
   }
 
   // 2. Ghép kịch bản (systemPrompt) với dữ liệu thực tế (contextData)
+  const outputRequirement = level === 'e2e'
+    ? '- Giữ đúng định dạng bảng Test Plan được quy định trong prompt Planner E2E.'
+    : '- Chỉ xuất ra mảng JSON hợp lệ đúng schema được quy định trong prompt.';
+
   const taskContent = `
 ${systemPrompt}
 
@@ -39,12 +57,13 @@ Bạn PHẢI sử dụng ĐÚNG thông tin thực tế từ mục [THÔNG TIN TH
 ---
 
 [THÔNG TIN THỰC TẾ CỦA NGƯỜI DÙNG - ĐÂY LÀ MỤC TIÊU THẬT SỰ]
-URL / Tính năng cần kiểm thử: ${contextData}
+${contextData}
 
 [YÊU CẦU ĐẦU RA]
-- Sinh test case dựa 100% trên URL/tính năng "${contextData}" ở trên.
+- Sinh test case dựa 100% trên thông tin thực tế ở trên.
 - KHÔNG sử dụng bất kỳ thông tin nào từ ví dụ minh họa (saucedemo, standard_user, secret_sauce, v.v.).
-- Chỉ xuất ra mảng JSON hợp lệ chứa các test case. KHÔNG GIẢI THÍCH GÌ THÊM.
+${outputRequirement}
+- KHÔNG GIẢI THÍCH GÌ THÊM ngoài định dạng đầu ra được yêu cầu.
   `;
 
   // ... (Phần code bên dưới giữ nguyên như cũ: tạo workDir, gọi adapter, xuất file JSON)
@@ -68,14 +87,26 @@ URL / Tính năng cần kiểm thử: ${contextData}
   //});
 
   if (result.ok) {
-    const jsonMatch = result.rawOutput.match(/\[[\s\S]*\]/);
-    const jsonContent = jsonMatch ? jsonMatch[0] : result.rawOutput;
-
     if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
-    fs.writeFileSync(`artifacts/test-plan-${level}.json`, jsonContent);
+
+    let planPath = '';
+    if (level === 'e2e') {
+      planPath = 'artifacts/test-plan-e2e.md';
+      fs.writeFileSync(planPath, result.rawOutput.trim() + '\n');
+    } else {
+      const parsedPlan = parseJsonArray(result.rawOutput);
+      if (!parsedPlan) {
+        const invalidPath = `artifacts/test-plan-${level}.invalid.txt`;
+        fs.writeFileSync(invalidPath, result.rawOutput.trim() + '\n');
+        console.error(`❌ Planner không trả về JSON hợp lệ. Đã lưu output để kiểm tra tại ${invalidPath}`);
+        return false;
+      }
+      planPath = `artifacts/test-plan-${level}.json`;
+      fs.writeFileSync(planPath, JSON.stringify(parsedPlan, null, 2) + '\n');
+    }
 
     console.log(
-      `✅ Đã lập xong kế hoạch! Lưu tại: artifacts/test-plan-${level}.json`,
+      `✅ Đã lập xong kế hoạch! Lưu tại: ${planPath}`,
     );
     return true;
   } else {

@@ -14,13 +14,22 @@ export async function runGenerator(
   );
 
   // 1. Kiểm tra kế hoạch từ file JSON
-  const planPath = `artifacts/test-plan-${level}.json`;
+  const preferredPlanPath = level === 'e2e'
+    ? 'artifacts/test-plan-e2e.md'
+    : `artifacts/test-plan-${level}.json`;
+  const legacyPlanPath = `artifacts/test-plan-${level}.json`;
+  const planPath = fs.existsSync(preferredPlanPath) ? preferredPlanPath : legacyPlanPath;
   if (!fs.existsSync(planPath)) {
     console.error(`❌ Không tìm thấy ${planPath}. Hãy chạy Planner trước!`);
     return false;
   }
 
   const testPlan = fs.readFileSync(planPath, "utf-8");
+
+  let sourceScript = '';
+  if (level === 'e2e' && fs.existsSync('artifacts/source-script-e2e.md')) {
+    sourceScript = fs.readFileSync('artifacts/source-script-e2e.md', 'utf-8');
+  }
 
   // 2. Cấu hình Framework đích (Playwright hay Vitest)
   let framework = "";
@@ -64,12 +73,18 @@ Bạn là chuyên gia tự động hóa kiểm thử. Dựa vào bản Test Plan
 ${testPlan}
 ${crawledDomData}
 
+${sourceScript ? `[KỊCH BẢN GỐC - NGUỒN SỰ THẬT CHO THỨ TỰ BƯỚC, TEST DATA VÀ ASSERTION]:\n${sourceScript}` : ''}
+
 [QUY TẮC QUAN TRỌNG - PHẢI TUÂN THỦ TUYỆT ĐỐI]:
-1. Nhóm các test case theo MODULE thành các file riêng biệt.
-2. Mỗi file bắt đầu bằng dòng đánh dấu: // FILE: <tên-file>${fileExtension}
-3. Mỗi file chỉ được có DUY NHẤT MỘT dòng import ở đầu file.
-4. TUYỆT ĐỐI KHÔNG lặp lại dòng import ở giữa hoặc cuối file.
-5. Toàn bộ nội dung nằm trong một khối \`\`\`typescript ... \`\`\`.
+1. Kịch bản gốc quyết định chính xác thứ tự bước, dữ liệu nhập và assertion; Test Plan chỉ bổ sung ý nghĩa nghiệp vụ.
+2. Locator chỉ được lấy từ role/name/placeholder/label hoặc cột Verified selector có trong báo cáo DOM.
+3. TUYỆT ĐỐI KHÔNG tự đoán class theo thư viện UI như .lucide-eye, .fa-edit hoặc [class*=eye] nếu DOM không cung cấp class đó.
+4. Nếu không có locator duy nhất được xác minh, đánh dấu test bằng test.fixme(true, 'Không có locator được xác minh cho ...') thay vì sinh locator đoán mò.
+5. Nhóm các test case theo MODULE thành các file riêng biệt.
+6. Mỗi file bắt đầu bằng dòng đánh dấu: // FILE: <tên-file>${fileExtension}
+7. Mỗi file chỉ được có DUY NHẤT MỘT dòng import ở đầu file.
+8. TUYỆT ĐỐI KHÔNG lặp lại dòng import ở giữa hoặc cuối file.
+9. Toàn bộ nội dung nằm trong một khối \`\`\`typescript ... \`\`\`.
 
 [VÍ DỤ ĐỊNH DẠNG ĐẦU RA - TUÂN THEO CHÍNH XÁC]:
 \`\`\`typescript
@@ -217,19 +232,6 @@ function fixCommonPlaywrightIssues(code: string): string {
       .trim();
     fixes.push("FIX-0: Dọn dẹp lời thoại rác & markdown code fences từ model");
   }
-  // ── FIX 7: Icon con mắt (Hiện/Ẩn mật khẩu) ──────────────────────────
-  const eyeIconPattern = /await\s+page\.(getByRole\(['"]button['"],\s*\{\s*name:\s*['"](Hiện|Ẩn)?\s*mật\s*khẩu['"]\s*\}\)|getByText\(['"](Hiện|Ẩn)?\s*mật\s*khẩu['"]\)|locator\(['"][^'"]*(con\s*mắt|eye|show-pass)['"]\))\s*\.click\(\)/gi;
-  if (eyeIconPattern.test(fixed)) {
-    fixed = fixed.replace(eyeIconPattern, "await page.locator('.lucide-eye, .lucide-eye-off, [data-align=\"inline-end\"], [class*=\"eye\"]').first().click()");
-    fixes.push("FIX-7: Icon con mắt → locator .lucide-eye / [data-align=inline-end]");
-  }
-  // Nếu đã có locator old pattern (.first() chọn nhầm lock icon), thay bằng selector chính xác .lucide-eye / inline-end
-  const oldEyePattern = /await\s+page\.locator\(['"]input\[type=\\"password\\"\][^\n]*\)\.first\(\)\.click\(\);?/g;
-  if (oldEyePattern.test(fixed)) {
-    fixed = fixed.replace(oldEyePattern, "await page.locator('.lucide-eye, .lucide-eye-off, [data-align=\"inline-end\"], [class*=\"eye\"]').first().click();");
-    fixes.push("FIX-7b: Đổi locator cũ chọn nhầm icon khóa sang .lucide-eye chính xác");
-  }
-
   // ── FIX 8: Fix selectOption() on custom dropdowns ──────────────────────
   const selectOptionPattern = /await\s+page\.getByRole\(['"]option['"],\s*\{\s*name:\s*['"](.*?)['"]\s*\}\)\.selectOption\(['"].*?['"]\);?/g;
   if (selectOptionPattern.test(fixed)) {

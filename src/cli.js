@@ -6,12 +6,17 @@ import { TestPolicyHarness } from "./harness/policy.js";
 
 import { runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
-import { runCrawler } from "./agents/crawler/run.js";
 import { parseScript } from "./core/step-parser.js";
 import { runLive } from "./agents/crawler/live-runner.js";
-import { buildActionPlan, generateSpecFromActionPlan } from "./core/action-plan.js";
 
 const harness = new TestPolicyHarness();
+
+function markdownCell(value) {
+  return String(value ?? "")
+    .replace(/\|/g, "\\|")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+}
 
 // 1. MENU CHÍNH CỦA ỨNG DỤNG
 async function mainMenu() {
@@ -127,10 +132,23 @@ Vi du:
     ]);
 
     // === CRAWLER: Live Multi-State Crawler (vấn đáp DOM nhiều lần theo từng trạng thái) ===
-    let crawledDomSection = "";
     console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de van dap DOM theo tung trang thai...");
     try {
       const parsedCases = parseScript(scriptContent);
+      if (parsedCases.length === 0) {
+        throw new Error("Khong tim thay test case nao trong kich ban");
+      }
+
+      const unparsedSteps = parsedCases.flatMap(testCase =>
+        testCase.unparsedSteps.map(step => `${testCase.id}: ${step}`),
+      );
+      if (unparsedSteps.length > 0) {
+        console.warn(`   Parser can xem lai ${unparsedSteps.length} buoc; Planner van nhan kich ban goc.`);
+        unparsedSteps.forEach(step => console.warn(`   - ${step}`));
+      }
+
+      if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+      fs.writeFileSync("artifacts/source-script-e2e.md", scriptContent.trim() + "\n");
       const snapshotsMap = await runLive(parsedCases);
 
       let domReport = "# Multi-State Crawled DOM Data\n\n";
@@ -140,51 +158,44 @@ Vi du:
         for (const snap of snapshots) {
           totalSnapshots++;
           domReport += `### State: ${snap.afterStep} (URL: ${snap.url})\n`;
-          domReport += `| Tag | Type | Role | Name | Placeholder | Label | Text |\n`;
-          domReport += `| --- | ---- | ---- | ---- | ----------- | ----- | ---- |\n`;
+          domReport += `| Tag | Type | Role | Accessible name | Placeholder | Label | Text | Test ID | ID | Class | Nearby input | Verified selector |\n`;
+          domReport += `| --- | ---- | ---- | --------------- | ----------- | ----- | ---- | ------- | -- | ----- | ------------ | ----------------- |\n`;
           snap.elements.forEach(el => {
             if (el.isVisible) {
-              domReport += `| ${el.tag} | ${el.type || ''} | ${el.role || ''} | ${el.name || ''} | ${el.placeholder || ''} | ${el.ariaLabel || ''} | ${el.text ? el.text.slice(0, 50) : ''} |\n`;
+              domReport += `| ${[
+                el.tag,
+                el.type,
+                el.role,
+                el.accessibleName,
+                el.placeholder,
+                el.ariaLabel,
+                el.text ? el.text.slice(0, 80) : "",
+                el.testId,
+                el.id,
+                el.className,
+                el.nearbyInputPlaceholder,
+                el.selector,
+              ].map(markdownCell).join(" | ")} |\n`;
             }
           });
           domReport += "\n";
         }
       }
 
-      if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
       fs.writeFileSync("artifacts/crawled-dom.md", domReport);
       console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
-      crawledDomSection = `\n\n[DU LIEU DOM THUC TE DA CRAWL THEO TUNG TRANG THAI NGHIEP VU]\nKhi buoc test mo ta phan tu, hay TRA CUU DOM ben duoi de tim selector va role chinh xac.\n${domReport}`;
     } catch (err) {
       console.log(`   Warning: Live Crawler gap loi (khong anh huong kich ban): ${err.message}`);
     }
 
     contextData = `[CHẾ ĐỘ KỊCH BẢN CHI TIẾT - SCRIPT MODE]
 QUAN TRỌNG: Người dùng đã viết kịch bản test CHI TIẾT TỪNG BƯỚC. 
-AI PHẢI chuyển đổi CHÍNH XÁC 1:1 từng bước sang code Playwright.
+Planner PHẢI giữ CHÍNH XÁC 1:1 từng bước trong Test Plan.
 TUYỆT ĐỐI KHÔNG được tự thêm, bớt hoặc thay đổi bất kỳ bước nào.
-Khi gặp mô tả mơ hồ (VD: "icon con mắt", "nút ẩn/hiện"), tra cứu dữ liệu DOM bên dưới để tìm selector chính xác.
-Nếu không tìm thấy trong DOM, dùng selector tổng quát nhất có thể (VD: button gần ô input password).
-
-Quy tắc chuyển đổi:
-- "Mở URL" hoặc "Mở trang ..." → await page.goto(URL)
-- "Nhập 'X' vào ô 'Y'" → await page.getByPlaceholder('Y').fill('X')
-- "Nhập 'X' vào label 'Y'" → await page.getByLabel('Y').fill('X')
-- "Bỏ trống ô 'Y'" → không gọi fill() cho ô đó
-- "Bấm nút 'Z'" → await page.getByRole('button', { name: 'Z' }).or(page.getByText('Z')).first().click()
-- "Click vào 'Z'" → await page.getByText('Z').first().click()
-- "Bấm vào icon ..." → tra cứu DOM để tìm button/svg gần nhất, dùng locator('.class-name').first().click()
-- "Kiểm tra: hiển thị text 'W'" hoặc "Kiểm tra: Có thông báo 'W'" → await expect(page.getByText('W')).toBeVisible()
-- "Kiểm tra: Có cả 2 thông báo 'A' và 'B'" → 2 dòng expect riêng biệt
-- "Kiểm tra: URL không còn chứa 'X'" → await expect(page).not.toHaveURL(/.*X.*/i)
-- "Kiểm tra: URL chứa 'X'" → await expect(page).toHaveURL(/.*X.*/i)
-- "Kiểm tra: Mật khẩu dạng ẩn" → await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'password')
-- "Kiểm tra: Mật khẩu dạng văn bản" → await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'text')
-- "Chờ trang load xong" → await page.waitForLoadState('networkidle')
 
 === KỊCH BẢN TEST CỦA NGƯỜI DÙNG ===
 ${scriptContent}
-=== HẾT KỊCH BẢN ===${crawledDomSection}`;
+=== HẾT KỊCH BẢN ===`;
 
   } else if (level === "integration") {
     const { apiDesc } = await inquirer.prompt([

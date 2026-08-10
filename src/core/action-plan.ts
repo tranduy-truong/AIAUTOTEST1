@@ -52,9 +52,9 @@ export function buildActionPlan(
       
       switch (step.type) {
         case 'goto':
-          playwrightCode = `await page.goto('${step.url}');\nawait page.waitForLoadState('networkidle');`;
+          playwrightCode = `await page.goto('${step.url}', { waitUntil: 'domcontentloaded' });`;
           // Sau khi goto thì sử dụng snapshot tiếp theo đã chụp
-          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].stepDescription.includes('goto')) {
+          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].afterStep.includes('goto')) {
               currentSnapshot = snapshots[snapshotIndex];
               snapshotIndex++;
           }
@@ -72,7 +72,7 @@ export function buildActionPlan(
           const clickRes = resolveLocator('click', step.target || '', currentSnapshot);
           playwrightCode = `await ${clickRes.locator || 'page.locator("unknown")'}.click();`;
           confidence = clickRes.confidence || 'medium';
-          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].stepDescription.includes('click')) {
+          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].afterStep.includes('click')) {
               currentSnapshot = snapshots[snapshotIndex];
               snapshotIndex++;
           }
@@ -83,7 +83,7 @@ export function buildActionPlan(
           const safeSelectValue = (step.value || '').replace(/'/g, "\\'");
           playwrightCode = `await page.getByText('${safeSelectTarget}').or(page.getByRole('combobox', { name: '${safeSelectTarget}' })).first().click();\nawait page.getByRole('option', { name: '${safeSelectValue}' }).first().click();`;
           confidence = 'medium';
-          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].stepDescription.includes('select')) {
+          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].afterStep.includes('select')) {
               currentSnapshot = snapshots[snapshotIndex];
               snapshotIndex++;
           }
@@ -96,7 +96,7 @@ export function buildActionPlan(
           break;
 
         case 'wait':
-          playwrightCode = `await page.waitForLoadState('networkidle');`;
+          playwrightCode = `await page.waitForLoadState('domcontentloaded');`;
           break;
       }
 
@@ -161,7 +161,7 @@ export function generateSpecFromActionPlan(plan: ActionPlan): string {
         actionLines.forEach(l => lines.push(`  ${l}`));
       }
     });
-    lines.push("  await page.waitForLoadState('networkidle');");
+    lines.push("  await page.waitForLoadState('domcontentloaded');");
     lines.push("}");
     lines.push("");
   }

@@ -7,7 +7,13 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 .env
+/.testkit/
 /artifacts/crawled-dom.md
+/artifacts/source-script-e2e.md
+/artifacts/test-plan-*.json
+/artifacts/test-plan-*.md
+/artifacts/test-plan-*.invalid.txt
+/artifacts/action-plan.json
 /artifacts/report.md
 /screenshots/
 *.log
