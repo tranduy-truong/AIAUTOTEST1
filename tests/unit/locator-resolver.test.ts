@@ -40,4 +40,34 @@ describe('resolveLocator', () => {
       confidence: 'high',
     });
   });
+
+  it('matches common login controls from a captured DOM snapshot', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/login',
+      afterStep: 'after goto',
+      elements: [
+        {
+          tag: 'input',
+          placeholder: 'Nhập tên đăng nhập',
+          selector: '#username',
+          isVisible: true,
+        },
+        {
+          tag: 'button',
+          text: 'Đăng nhập',
+          selector: '#login-button',
+          isVisible: true,
+        },
+      ],
+    };
+
+    expect(resolveLocator('fill', 'Nhap ten dang nhap', snapshot)).toMatchObject({
+      matchedBy: 'placeholder',
+      confidence: 'high',
+    });
+    expect(resolveLocator('click', 'Đăng nhập', snapshot)).toMatchObject({
+      matchedBy: 'role+name',
+      confidence: 'high',
+    });
+  });
 });

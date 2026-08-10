@@ -7,16 +7,9 @@ import { TestPolicyHarness } from "./harness/policy.js";
 import { runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
 import { parseScript } from "./core/step-parser.js";
-import { runLive } from "./agents/crawler/live-runner.js";
+import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 
 const harness = new TestPolicyHarness();
-
-function markdownCell(value) {
-  return String(value ?? "")
-    .replace(/\|/g, "\\|")
-    .replace(/[\r\n]+/g, " ")
-    .trim();
-}
 
 // 1. MENU CHÍNH CỦA ỨNG DỤNG
 async function mainMenu() {
@@ -151,36 +144,9 @@ Vi du:
       fs.writeFileSync("artifacts/source-script-e2e.md", scriptContent.trim() + "\n");
       const snapshotsMap = await runLive(parsedCases);
 
-      let domReport = "# Multi-State Crawled DOM Data\n\n";
-      let totalSnapshots = 0;
-      for (const [tcId, snapshots] of snapshotsMap) {
-        domReport += `## ${tcId} DOM Snapshots\n\n`;
-        for (const snap of snapshots) {
-          totalSnapshots++;
-          domReport += `### State: ${snap.afterStep} (URL: ${snap.url})\n`;
-          domReport += `| Tag | Type | Role | Accessible name | Placeholder | Label | Text | Test ID | ID | Class | Nearby input | Verified selector |\n`;
-          domReport += `| --- | ---- | ---- | --------------- | ----------- | ----- | ---- | ------- | -- | ----- | ------------ | ----------------- |\n`;
-          snap.elements.forEach(el => {
-            if (el.isVisible) {
-              domReport += `| ${[
-                el.tag,
-                el.type,
-                el.role,
-                el.accessibleName,
-                el.placeholder,
-                el.ariaLabel,
-                el.text ? el.text.slice(0, 80) : "",
-                el.testId,
-                el.id,
-                el.className,
-                el.nearbyInputPlaceholder,
-                el.selector,
-              ].map(markdownCell).join(" | ")} |\n`;
-            }
-          });
-          domReport += "\n";
-        }
-      }
+      const totalSnapshots = [...snapshotsMap.values()]
+        .reduce((total, snapshots) => total + snapshots.length, 0);
+      const domReport = buildCompactDomReport(snapshotsMap);
 
       fs.writeFileSync("artifacts/crawled-dom.md", domReport);
       console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);

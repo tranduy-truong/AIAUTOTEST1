@@ -40,7 +40,19 @@ function normalizeText(text: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim()
-    .replace(/^['"]|['"]$/g, ''); // Bỏ dấu nháy ở đầu và cuối nếu có
+    .replace(/đ/g, 'd')
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function textMatches(candidate: string | undefined, target: string): boolean {
+  const normalizedCandidate = normalizeText(candidate || '');
+  return Boolean(
+    normalizedCandidate &&
+    target &&
+    (normalizedCandidate.includes(target) || target.includes(normalizedCandidate))
+  );
 }
 
 function findIconElement(target: string, elements: ElementInfo[]): ElementInfo | undefined {
@@ -103,7 +115,7 @@ export function resolveLocator(
   // 1. Xử lý bước 'fill' (nhập liệu)
   if (stepType === 'fill') {
     // a. Tìm theo placeholder (độ tin cậy cao)
-    const byPlaceholder = elements.find(el => el.placeholder && normalizeText(el.placeholder).includes(target));
+    const byPlaceholder = elements.find(el => el.isVisible && textMatches(el.placeholder, target));
     if (byPlaceholder && byPlaceholder.placeholder) {
       return {
         locator: `page.getByPlaceholder('${byPlaceholder.placeholder}')`,
@@ -114,7 +126,7 @@ export function resolveLocator(
     }
 
     // b. Tìm theo ariaLabel (độ tin cậy cao)
-    const byAriaLabel = elements.find(el => el.ariaLabel && normalizeText(el.ariaLabel).includes(target));
+    const byAriaLabel = elements.find(el => el.isVisible && textMatches(el.ariaLabel, target));
     if (byAriaLabel && byAriaLabel.ariaLabel) {
       return {
         locator: `page.getByLabel('${byAriaLabel.ariaLabel}')`,
@@ -125,7 +137,7 @@ export function resolveLocator(
     }
 
     // c. Tìm theo name (độ tin cậy trung bình)
-    const byName = elements.find(el => el.name && normalizeText(el.name).includes(target));
+    const byName = elements.find(el => el.isVisible && textMatches(el.name, target));
     if (byName && byName.name) {
       return {
         locator: `page.locator('[name="${byName.name}"]')`,
@@ -136,7 +148,7 @@ export function resolveLocator(
     }
 
     // d. Tìm theo id (độ tin cậy trung bình)
-    const byId = elements.find(el => el.id && normalizeText(el.id).includes(target));
+    const byId = elements.find(el => el.isVisible && textMatches(el.id, target));
     if (byId && byId.id) {
       return {
         locator: `page.locator('#${byId.id}')`,
@@ -161,7 +173,7 @@ export function resolveLocator(
     
     // a. Tìm button hoặc link có text trùng khớp (độ tin cậy cao)
     const isButtonOrLink = (el: ElementInfo) => el.tag === 'button' || el.tag === 'a' || el.role === 'button' || el.role === 'link';
-    const byText = elements.find(el => isButtonOrLink(el) && el.text && (normalizeText(el.text).includes(target) || target.includes(normalizeText(el.text))));
+    const byText = elements.find(el => el.isVisible && isButtonOrLink(el) && textMatches(el.text, target));
     
     if (byText && byText.text) {
       const role = (byText.tag === 'a' || byText.role === 'link') ? 'link' : 'button';
@@ -188,7 +200,7 @@ export function resolveLocator(
     }
 
     // c. Tìm theo ariaLabel (độ tin cậy trung bình)
-    const byAriaLabel = elements.find(el => el.ariaLabel && (normalizeText(el.ariaLabel).includes(target) || target.includes(normalizeText(el.ariaLabel))));
+    const byAriaLabel = elements.find(el => el.isVisible && textMatches(el.ariaLabel, target));
     if (byAriaLabel && byAriaLabel.ariaLabel) {
       const safeLabel = byAriaLabel.ariaLabel.replace(/'/g, "\\'");
       return {

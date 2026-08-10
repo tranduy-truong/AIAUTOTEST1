@@ -117,6 +117,104 @@ export async function captureSnapshot(page: Page, afterStep: string): Promise<Do
   return { url: page.url(), afterStep, elements };
 }
 
+const INTERACTIVE_SELECTOR = [
+  'input', 'textarea', 'select', 'button', 'a[href]',
+  '[role]', '[aria-label]', '[data-testid]',
+].join(', ');
+
+async function waitForInteractiveDom(page: Page): Promise<void> {
+  const expression = `document.querySelector(${JSON.stringify(INTERACTIVE_SELECTOR)}) !== null`;
+  try {
+    await page.waitForFunction(expression, undefined, { timeout: 10000 });
+  } catch {
+    // Một số trang hợp lệ không có control tương tác ở màn hình đầu. Snapshot vẫn
+    // được chụp để Planner/Generator có bằng chứng thay vì dừng toàn bộ pipeline.
+  }
+}
+
+function reportCell(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\|/g, '\\|')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+function elementPriority(element: ElementInfo): number {
+  let score = 0;
+  if (element.selector) score += 5;
+  if (element.placeholder || element.ariaLabel || element.accessibleName) score += 4;
+  if (element.testId || element.id || element.name) score += 3;
+  if (element.nearbyInputPlaceholder) score += 3;
+  if (['input', 'textarea', 'select', 'button', 'svg', 'i'].includes(element.tag)) score += 2;
+  return score;
+}
+
+export function buildCompactDomReport(
+  snapshotsMap: Map<string, DomSnapshot[]>,
+  maxElements = 60,
+): string {
+  const uniqueElements = new Map<string, ElementInfo>();
+  let totalSnapshots = 0;
+
+  for (const snapshots of snapshotsMap.values()) {
+    totalSnapshots += snapshots.length;
+    for (const snapshot of snapshots) {
+      for (const element of snapshot.elements) {
+        if (!element.isVisible) continue;
+        if (!element.selector && !element.placeholder && !element.ariaLabel && !element.text) continue;
+
+        const signature = JSON.stringify([
+          element.tag,
+          element.type,
+          element.role,
+          element.accessibleName,
+          element.placeholder,
+          element.ariaLabel,
+          element.text,
+          element.testId,
+          element.id,
+          element.name,
+          element.nearbyInputPlaceholder,
+          element.selector,
+        ]);
+        if (!uniqueElements.has(signature)) uniqueElements.set(signature, element);
+      }
+    }
+  }
+
+  const selected = [...uniqueElements.values()]
+    .sort((left, right) => elementPriority(right) - elementPriority(left))
+    .slice(0, maxElements);
+
+  const lines = [
+    '# Compact Verified DOM Locator Catalog',
+    '',
+    `- Snapshots captured: ${totalSnapshots}`,
+    `- Unique visible elements: ${uniqueElements.size}`,
+    `- Elements included: ${selected.length}`,
+    '- Duplicate elements across test cases and states were removed.',
+    '',
+    '| Tag | Type/Role | Accessible name | Placeholder | Text | Test ID/ID/Name | Nearby input | Verified selector |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+  ];
+
+  for (const element of selected) {
+    lines.push(`| ${[
+      element.tag,
+      [element.type, element.role].filter(Boolean).join('/'),
+      element.accessibleName || element.ariaLabel,
+      element.placeholder,
+      element.text,
+      element.testId || element.id || element.name,
+      element.nearbyInputPlaceholder,
+      element.selector,
+    ].map(reportCell).join(' | ')} |`);
+  }
+
+  return lines.join('\n') + '\n';
+}
+
 function locatorCandidates(page: Page, resolution: ResolvedLocator, target: string): Locator[] {
   const element = resolution.element;
   if (element?.selector) return [page.locator(element.selector)];
@@ -152,6 +250,11 @@ async function uniqueLocator(page: Page, step: ParsedStep, snapshot: DomSnapshot
   const candidates = locatorCandidates(page, resolution, target);
 
   for (const candidate of candidates) {
+    try {
+      await candidate.first().waitFor({ state: 'attached', timeout: 4000 });
+    } catch {
+      continue;
+    }
     if (await candidate.count() === 1) return candidate;
   }
 
@@ -185,6 +288,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
             if (step.type === 'goto') {
               if (!step.url) throw new Error('Buoc goto khong co URL');
               await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
+              await waitForInteractiveDom(page);
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
               continue;
             }

@@ -4,6 +4,12 @@ import { fileURLToPath } from "url";
 import { OpenAIAdapter } from "../../adapters/openai.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const MAX_DOM_REPORT_CHARS = 8000;
+
+export function limitDomReport(report: string, maxChars = MAX_DOM_REPORT_CHARS): string {
+  if (report.length <= maxChars) return report;
+  return `${report.slice(0, maxChars)}\n\n[DOM catalog truncated to stay within the AI token limit.]`;
+}
 
 export function getGeneratedTestDirectory(
   level: "unit" | "integration" | "e2e",
@@ -68,9 +74,10 @@ export async function runGenerator(
   // Đọc DOM data nếu có từ crawler
   let crawledDomData = "";
   if (fs.existsSync("artifacts/crawled-dom.md")) {
+    const domReport = limitDomReport(fs.readFileSync("artifacts/crawled-dom.md", "utf-8"));
     crawledDomData =
       `\n\n[BÁO CÁO CRAWLED DOM THỰC TẾ - BẮT BUỘC DÙNG CHÍNH XÁC CÁC LOCATOR NÀY]:\n` +
-      fs.readFileSync("artifacts/crawled-dom.md", "utf-8");
+      domReport;
   }
 
   const prompt = `
@@ -116,6 +123,8 @@ test.describe('Product', () => {
 });
 \`\`\`
   `;
+
+  console.log(`   Kích thước prompt Generator: ${prompt.length.toLocaleString('vi-VN')} ký tự`);
 
   // 4. Gọi AI
   const runId = `run_${Date.now()}`;

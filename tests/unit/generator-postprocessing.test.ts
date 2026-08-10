@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import path from 'path';
-import { fixCommonPlaywrightIssues, getGeneratedTestDirectory } from '../../src/agents/generator/run.js';
+import {
+  fixCommonPlaywrightIssues,
+  getGeneratedTestDirectory,
+  limitDomReport,
+} from '../../src/agents/generator/run.js';
 
 describe('getGeneratedTestDirectory', () => {
   it('isolates generated E2E specs from tracked source files', () => {
@@ -10,6 +14,16 @@ describe('getGeneratedTestDirectory', () => {
     expect(getGeneratedTestDirectory('unit', '/workspace')).toBe(
       path.join('/workspace', 'tests', 'unit'),
     );
+  });
+});
+
+describe('limitDomReport', () => {
+  it('caps DOM evidence before building the Groq prompt', () => {
+    const report = 'x'.repeat(20_000);
+    const limited = limitDomReport(report, 1_000);
+
+    expect(limited.length).toBeLessThan(1_100);
+    expect(limited).toContain('truncated');
   });
 });
 

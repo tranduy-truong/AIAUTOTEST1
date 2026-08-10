@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { CAPTURE_SNAPSHOT_SCRIPT } from '../../src/agents/crawler/live-runner.js';
+import {
+  buildCompactDomReport,
+  CAPTURE_SNAPSHOT_SCRIPT,
+} from '../../src/agents/crawler/live-runner.js';
 
 describe('browser snapshot script', () => {
   it('executes without relying on tsx helpers such as __name', () => {
@@ -28,5 +31,27 @@ describe('browser snapshot script', () => {
       nearbyInputPlaceholder: 'Nhập mật khẩu',
       selector: '#password-toggle',
     });
+  });
+});
+
+describe('buildCompactDomReport', () => {
+  it('deduplicates repeated snapshots before sending DOM evidence to the Generator', () => {
+    const element = {
+      tag: 'input',
+      placeholder: 'Nhập tên đăng nhập',
+      selector: '#username',
+      isVisible: true,
+    };
+    const repeatedSnapshots = Array.from({ length: 47 }, (_, index) => ({
+      url: 'https://example.com/login',
+      afterStep: `state ${index + 1}`,
+      elements: [element],
+    }));
+
+    const report = buildCompactDomReport(new Map([['TC_01', repeatedSnapshots]]));
+
+    expect(report).toContain('Snapshots captured: 47');
+    expect(report).toContain('Unique visible elements: 1');
+    expect(report.match(/#username/g)).toHaveLength(1);
   });
 });
