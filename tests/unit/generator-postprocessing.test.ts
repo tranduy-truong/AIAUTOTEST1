@@ -5,7 +5,9 @@ import path from 'path';
 import type { ActionPlan } from '../../src/core/action-plan.js';
 import {
   buildGeneratorContext,
-  clearGeneratedE2ESpecs,
+  cleanupLegacyGeneratedE2EOutput,
+  createDatedUniqueSpecPath,
+  deriveSpecBaseName,
   fixCommonPlaywrightIssues,
   getGeneratedTestDirectory,
   limitDomReport,
@@ -21,7 +23,7 @@ describe('getGeneratedTestDirectory', () => {
     );
   });
 
-  it('cleans generated specs but keeps documentation in tests/e2e', () => {
+  it('keeps existing specs and only removes the legacy generated directory', () => {
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-output-'));
 
     try {
@@ -30,11 +32,47 @@ describe('getGeneratedTestDirectory', () => {
       fs.mkdirSync(path.join(outDir, 'generated'));
       fs.writeFileSync(path.join(outDir, 'generated', 'legacy.spec.ts'), 'legacy');
 
-      clearGeneratedE2ESpecs(outDir);
+      cleanupLegacyGeneratedE2EOutput(outDir);
 
-      expect(fs.existsSync(path.join(outDir, 'old.spec.ts'))).toBe(false);
+      expect(fs.existsSync(path.join(outDir, 'old.spec.ts'))).toBe(true);
       expect(fs.existsSync(path.join(outDir, 'generated'))).toBe(false);
       expect(fs.readFileSync(path.join(outDir, 'README.md'), 'utf-8')).toBe('keep');
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('derives a Vietnamese business name without accents from test cases', () => {
+    expect(deriveSpecBaseName([
+      'Thêm tổ chức thành công',
+      'Thêm tổ chức thất bại',
+    ], 'hcm_dang_nhap')).toBe('them_to_chuc');
+  });
+
+  it('adds the date and a sequence instead of overwriting an existing spec', () => {
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-naming-'));
+
+    try {
+      const now = new Date(2026, 7, 10);
+      const first = createDatedUniqueSpecPath(
+        outDir,
+        ['Thêm tổ chức thành công', 'Thêm tổ chức thất bại'],
+        'hcm_dang_nhap',
+        '.spec.ts',
+        now,
+      );
+      expect(path.basename(first)).toBe('them_to_chuc_2026_08_10.spec.ts');
+      fs.writeFileSync(first, 'first run');
+
+      const second = createDatedUniqueSpecPath(
+        outDir,
+        ['Thêm tổ chức thành công', 'Thêm tổ chức thất bại'],
+        'hcm_dang_nhap',
+        '.spec.ts',
+        now,
+      );
+      expect(path.basename(second)).toBe('them_to_chuc_2026_08_10_02.spec.ts');
+      expect(fs.readFileSync(first, 'utf-8')).toBe('first run');
     } finally {
       fs.rmSync(outDir, { recursive: true, force: true });
     }
