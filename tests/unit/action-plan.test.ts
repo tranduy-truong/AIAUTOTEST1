@@ -190,4 +190,100 @@ describe('buildActionPlan', () => {
     expect(plan.testCases[0].actions[1].confidence).toBe('low');
     expect(plan.testCases[0].actions[1].matchedBy).toBe('fallback_role_button');
   });
+
+  it('compiles a custom dropdown from trigger and option snapshots', () => {
+    const testCase: ParsedTestCase = {
+      id: 'TC_01',
+      name: 'Chọn loại hình tổ chức',
+      url: 'https://example.com/to-chuc',
+      unparsedSteps: [],
+      steps: [
+        { type: 'goto', url: 'https://example.com/to-chuc', raw: '- Mở URL' },
+        {
+          type: 'select',
+          target: 'loại hình tổ chức',
+          value: 'Tổ chức tôn giáo',
+          raw: "- Dropdown chọn loại hình tổ chức, chọn 'Tổ chức tôn giáo'",
+        },
+      ],
+    };
+    const triggerSnapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'before step 2: dropdown',
+      elements: [{
+        tag: 'button',
+        role: 'combobox',
+        accessibleName: 'Chọn loại hình tổ chức',
+        ariaHasPopup: 'listbox',
+        selector: '#organization-type',
+        isVisible: true,
+      }],
+    };
+    const optionSnapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'during step 2: options for dropdown',
+      elements: [{
+        tag: 'div',
+        role: 'option',
+        accessibleName: 'Tổ chức tôn giáo',
+        text: 'Tổ chức tôn giáo',
+        selector: '#organization-type-religious',
+        isVisible: true,
+      }],
+    };
+
+    const plan = buildActionPlan(
+      [testCase],
+      new Map([['TC_01', [triggerSnapshot, optionSnapshot]]]),
+      { persist: false },
+    );
+    const select = plan.testCases[0].actions[1];
+
+    expect(select.confidence).toBe('high');
+    expect(select.matchedBy).toBe('verified_dropdown_trigger+verified_option');
+    expect(select.playwrightCode).toContain("page.locator('#organization-type').click()");
+    expect(select.playwrightCode).toContain(
+      "page.getByRole('option', { name: 'Tổ chức tôn giáo', exact: true }).click()",
+    );
+    expect(select.playwrightCode).not.toContain('.first()');
+  });
+
+  it('adds an observed URL postcondition after a navigation click', () => {
+    const testCase: ParsedTestCase = {
+      id: 'TC_01',
+      name: 'Đăng nhập rồi chuyển trang',
+      url: 'https://example.com/dang-nhap',
+      unparsedSteps: [],
+      steps: [
+        { type: 'goto', url: 'https://example.com/dang-nhap', raw: '- Mở URL' },
+        { type: 'click', target: 'Đăng nhập', raw: "- Bấm nút 'Đăng nhập'" },
+      ],
+    };
+    const before: DomSnapshot = {
+      url: 'https://example.com/dang-nhap',
+      afterStep: 'before step 2: login',
+      elements: [{
+        tag: 'button',
+        text: 'Đăng nhập',
+        accessibleName: 'Đăng nhập',
+        selector: '#login',
+        isVisible: true,
+      }],
+    };
+    const after: DomSnapshot = {
+      url: 'https://example.com/dashboard',
+      afterStep: 'after step 2: login',
+      elements: [],
+    };
+
+    const plan = buildActionPlan(
+      [testCase],
+      new Map([['TC_01', [before, after]]]),
+      { persist: false },
+    );
+
+    expect(plan.testCases[0].actions[1].playwrightCode).toContain(
+      "await page.waitForURL('https://example.com/dashboard'",
+    );
+  });
 });
