@@ -12,6 +12,9 @@ export interface ElementInfo {
   title?: string;
   accessibleName?: string;
   nearbyInputPlaceholder?: string;
+  labelText?: string;
+  scopeSelector?: string;
+  ariaHasPopup?: string;
   selector?: string;
   isVisible: boolean;
 }
@@ -53,6 +56,31 @@ function textMatches(candidate: string | undefined, target: string): boolean {
     target &&
     (normalizedCandidate.includes(target) || target.includes(normalizedCandidate))
   );
+}
+
+function uniqueVisibleMatch(
+  elements: ElementInfo[],
+  predicate: (element: ElementInfo) => boolean,
+): ElementInfo | undefined {
+  const matches = elements.filter(element => element.isVisible && predicate(element));
+  const uniqueTargets = new Map<string, ElementInfo>();
+  for (const element of matches) {
+    const key = element.selector || JSON.stringify([
+      element.tag,
+      element.role,
+      element.accessibleName,
+      element.placeholder,
+      element.text,
+      element.id,
+      element.name,
+    ]);
+    if (!uniqueTargets.has(key)) uniqueTargets.set(key, element);
+  }
+  return uniqueTargets.size === 1 ? [...uniqueTargets.values()][0] : undefined;
+}
+
+function escapeSingleQuoted(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 function findIconElement(target: string, elements: ElementInfo[]): ElementInfo | undefined {
@@ -115,7 +143,7 @@ export function resolveLocator(
   // 1. Xử lý bước 'fill' (nhập liệu)
   if (stepType === 'fill') {
     // a. Tìm theo placeholder (độ tin cậy cao)
-    const byPlaceholder = elements.find(el => el.isVisible && textMatches(el.placeholder, target));
+    const byPlaceholder = uniqueVisibleMatch(elements, el => textMatches(el.placeholder, target));
     if (byPlaceholder && byPlaceholder.placeholder) {
       return {
         locator: `page.getByPlaceholder('${byPlaceholder.placeholder}')`,
@@ -126,18 +154,31 @@ export function resolveLocator(
     }
 
     // b. Tìm theo ariaLabel (độ tin cậy cao)
-    const byAriaLabel = elements.find(el => el.isVisible && textMatches(el.ariaLabel, target));
-    if (byAriaLabel && byAriaLabel.ariaLabel) {
-      return {
-        locator: `page.getByLabel('${byAriaLabel.ariaLabel}')`,
-        confidence: 'high',
-        matchedBy: 'ariaLabel',
-        element: byAriaLabel
-      };
+    const byAriaLabel = uniqueVisibleMatch(elements, el =>
+      (el.tag === 'input' || el.tag === 'textarea') &&
+      (textMatches(el.ariaLabel, target) || textMatches(el.labelText, target)),
+    );
+    if (byAriaLabel) {
+      if (byAriaLabel.ariaLabel) {
+        return {
+          locator: `page.getByLabel('${escapeSingleQuoted(byAriaLabel.ariaLabel)}')`,
+          confidence: 'high',
+          matchedBy: 'ariaLabel',
+          element: byAriaLabel
+        };
+      }
+      if (byAriaLabel.selector) {
+        return {
+          locator: `page.locator('${escapeSingleQuoted(byAriaLabel.selector)}')`,
+          confidence: 'high',
+          matchedBy: 'verified_field_label',
+          element: byAriaLabel,
+        };
+      }
     }
 
     // c. Tìm theo name (độ tin cậy trung bình)
-    const byName = elements.find(el => el.isVisible && textMatches(el.name, target));
+    const byName = uniqueVisibleMatch(elements, el => textMatches(el.name, target));
     if (byName && byName.name) {
       return {
         locator: `page.locator('[name="${byName.name}"]')`,
@@ -148,7 +189,7 @@ export function resolveLocator(
     }
 
     // d. Tìm theo id (độ tin cậy trung bình)
-    const byId = elements.find(el => el.isVisible && textMatches(el.id, target));
+    const byId = uniqueVisibleMatch(elements, el => textMatches(el.id, target));
     if (byId && byId.id) {
       return {
         locator: `page.locator('#${byId.id}')`,
@@ -173,16 +214,42 @@ export function resolveLocator(
     
     // a. Tìm button hoặc link có text trùng khớp (độ tin cậy cao)
     const isButtonOrLink = (el: ElementInfo) => el.tag === 'button' || el.tag === 'a' || el.role === 'button' || el.role === 'link';
-    const byText = elements.find(el => el.isVisible && isButtonOrLink(el) && textMatches(el.text, target));
+    const byText = uniqueVisibleMatch(elements, el =>
+      isButtonOrLink(el) && (
+        textMatches(el.text, target) ||
+        textMatches(el.accessibleName, target) ||
+        textMatches(el.ariaLabel, target)
+      ),
+    );
     
     if (byText && byText.text) {
       const role = (byText.tag === 'a' || byText.role === 'link') ? 'link' : 'button';
-      const safeName = byText.text.trim().replace(/'/g, "\\'");
+      const safeName = escapeSingleQuoted((byText.accessibleName || byText.text).trim());
       return {
         locator: `page.getByRole('${role}', { name: '${safeName}' })`,
         confidence: 'high',
         matchedBy: 'role+name',
         element: byText
+      };
+    }
+
+    // Frameworks sometimes render a clickable div/span. Only use it when the
+    // live snapshot provides a unique selector; never infer a CSS class.
+    const byVerifiedInteractiveText = uniqueVisibleMatch(elements, el =>
+      Boolean(el.selector) &&
+      (Boolean(el.ariaHasPopup) || el.role === 'button' || el.role === 'menuitem') &&
+      (
+        textMatches(el.text, target) ||
+        textMatches(el.accessibleName, target) ||
+        textMatches(el.ariaLabel, target)
+      ),
+    );
+    if (byVerifiedInteractiveText?.selector) {
+      return {
+        locator: `page.locator('${escapeSingleQuoted(byVerifiedInteractiveText.selector)}')`,
+        confidence: 'high',
+        matchedBy: 'verified_interactive_text',
+        element: byVerifiedInteractiveText,
       };
     }
 
@@ -200,7 +267,7 @@ export function resolveLocator(
     }
 
     // c. Tìm theo ariaLabel (độ tin cậy trung bình)
-    const byAriaLabel = elements.find(el => el.isVisible && textMatches(el.ariaLabel, target));
+    const byAriaLabel = uniqueVisibleMatch(elements, el => textMatches(el.ariaLabel, target));
     if (byAriaLabel && byAriaLabel.ariaLabel) {
       const safeLabel = byAriaLabel.ariaLabel.replace(/'/g, "\\'");
       return {
@@ -234,40 +301,97 @@ export function resolveLocator(
   // 3. Xử lý bước 'select' (chọn dropdown)
   if (stepType === 'select') {
     const cleanTarget = stepTarget.replace(/^['"]|['"]$/g, '').replace(/'/g, "\\'");
-    
-    // a. Tìm combobox hoặc select có ariaLabel (độ tin cậy cao)
-    const byAriaLabel = elements.find(el => (el.tag === 'select' || el.role === 'combobox') && el.ariaLabel && normalizeText(el.ariaLabel).includes(target));
-    if (byAriaLabel && byAriaLabel.ariaLabel) {
-      const safeLabel = byAriaLabel.ariaLabel.replace(/'/g, "\\'");
-      return {
-        locator: `page.getByLabel('${safeLabel}')`,
-        confidence: 'high',
-        matchedBy: 'ariaLabel',
-        element: byAriaLabel
-      };
+
+    const isDropdown = (el: ElementInfo) =>
+      el.tag === 'select' || el.role === 'combobox' || el.ariaHasPopup === 'listbox';
+
+    // a. Accessible label, associated label, placeholder or visible trigger text.
+    const dropdown = uniqueVisibleMatch(elements, el =>
+      isDropdown(el) && [
+        el.ariaLabel,
+        el.accessibleName,
+        el.labelText,
+        el.placeholder,
+        el.text,
+      ].some(candidate => textMatches(candidate, target)),
+    );
+    if (dropdown) {
+      if (dropdown.selector) {
+        return {
+          locator: `page.locator('${escapeSingleQuoted(dropdown.selector)}')`,
+          confidence: 'high',
+          matchedBy: 'verified_dropdown_trigger',
+          element: dropdown,
+        };
+      }
     }
 
-    // b. Tìm phần tử có text khớp với nhãn dropdown (độ tin cậy trung bình)
-    const byLabelText = elements.find(el => el.text && normalizeText(el.text).includes(target));
-    if (byLabelText && byLabelText.text) {
-      const safeText = byLabelText.text.trim().replace(/'/g, "\\'");
+    // b. A unique label can point at a sibling custom trigger.
+    const byLabelText = uniqueVisibleMatch(elements, el =>
+      el.tag === 'label' && textMatches(el.text, target) && Boolean(el.selector),
+    );
+    if (byLabelText?.selector) {
       return {
-        locator: `page.getByText('${safeText}').first()`,
+        locator: `page.locator('${escapeSingleQuoted(byLabelText.selector)}')`,
         confidence: 'medium',
-        matchedBy: 'text',
-        element: byLabelText
+        matchedBy: 'verified_dropdown_label',
+        element: byLabelText,
       };
     }
 
-    // c. Fallback cho dropdown (dùng getByText().first())
     return {
-      locator: `page.getByText('${cleanTarget}').or(page.getByRole('combobox', { name: '${cleanTarget}' })).first()`,
+      locator: `page.getByRole('combobox', { name: '${cleanTarget}' })`,
       confidence: 'low',
       matchedBy: 'fallback_dropdown'
     };
   }
 
-  // 4. Xử lý bước 'check' (kiểm tra/assert)
+  // 4. Resolve an option only after the Crawler opened the dropdown and
+  // captured the overlay/listbox state.
+  if (stepType === 'option') {
+    const option = uniqueVisibleMatch(elements, el =>
+      (el.role === 'option' || el.tag === 'option' || el.role === 'menuitem') &&
+      (textMatches(el.text, target) || textMatches(el.accessibleName, target)),
+    );
+    if (option) {
+      if (option.role === 'option' || option.tag === 'option') {
+        const safeName = escapeSingleQuoted((option.accessibleName || option.text || stepTarget).trim());
+        return {
+          locator: `page.getByRole('option', { name: '${safeName}', exact: true })`,
+          confidence: 'high',
+          matchedBy: 'verified_option',
+          element: option,
+        };
+      }
+      if (option.selector) {
+        return {
+          locator: `page.locator('${escapeSingleQuoted(option.selector)}')`,
+          confidence: 'high',
+          matchedBy: 'verified_option_selector',
+          element: option,
+        };
+      }
+    }
+
+    const verifiedTextOption = uniqueVisibleMatch(elements, el =>
+      Boolean(el.selector) && textMatches(el.text, target),
+    );
+    if (verifiedTextOption?.selector) {
+      return {
+        locator: `page.locator('${escapeSingleQuoted(verifiedTextOption.selector)}')`,
+        confidence: 'medium',
+        matchedBy: 'verified_option_text',
+        element: verifiedTextOption,
+      };
+    }
+    return {
+      locator: `page.getByRole('option', { name: '${escapeSingleQuoted(stepTarget)}', exact: true })`,
+      confidence: 'low',
+      matchedBy: 'fallback_option',
+    };
+  }
+
+  // 5. Xử lý bước 'check' (kiểm tra/assert)
   if (stepType === 'check') {
     const originalTarget = stepTarget.replace(/^['"]|['"]$/g, '');
     const safeOriginal = originalTarget.replace(/'/g, "\\'");
