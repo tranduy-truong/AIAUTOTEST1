@@ -94,7 +94,8 @@ Không viết bất kỳ đoạn code Playwright / JavaScript / TypeScript nào.
 
 ### R03 — Test Data PHẢI dùng dữ liệu thực từ kịch bản
 
-- Nếu kịch bản có username/password cụ thể → giữ đúng ý nghĩa trong Test Data nhưng đánh dấu là dữ liệu nhạy cảm để Generator đưa vào biến môi trường.
+- Nếu kịch bản có URL, username/password hoặc dữ liệu cụ thể → sao chép chính xác vào Test Data để Generator sinh test cho đúng lần chạy đó.
+- Không chuyển dữ liệu của từng website thành biến môi trường cố định của toàn dự án.
 - Không dùng placeholder chung chung: `[valid_user]`, `[correct_password]`.
 - Nếu kịch bản bỏ trống một ô → ghi rõ: `Để trống`.
 

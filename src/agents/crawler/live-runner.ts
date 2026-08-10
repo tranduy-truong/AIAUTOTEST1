@@ -7,32 +7,38 @@ import {
   resolveLocator,
 } from '../../core/locator-resolver.js';
 
-async function captureSnapshot(page: Page, afterStep: string): Promise<DomSnapshot> {
-  const elements = await page.evaluate(() => {
+// Dùng chuỗi JavaScript thuần để đoạn code chạy trong browser không bị tsx/esbuild
+// chèn helper nội bộ (ví dụ __name) mà Playwright không thể serialize sang page.
+export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
+  (() => {
     const query = [
       'input', 'textarea', 'select', 'button', 'a[href]', 'label', 'svg', 'i',
       '[role]', '[aria-label]', '[data-testid]', '[title]',
     ].join(', ');
     const nodes = Array.from(document.querySelectorAll(query));
 
-    const escapeCss = (value: string) => {
-      if (globalThis.CSS?.escape) return globalThis.CSS.escape(value);
-      return value.replace(/[^a-zA-Z0-9_-]/g, character => `\\${character}`);
-    };
+    function escapeCss(value) {
+      if (globalThis.CSS && typeof globalThis.CSS.escape === 'function') {
+        return globalThis.CSS.escape(value);
+      }
+      return value.replace(/[^a-zA-Z0-9_-]/g, function (character) {
+        return '\\' + character;
+      });
+    }
 
-    const uniqueSelector = (source: Element): string | undefined => {
+    function uniqueSelector(source) {
       const interactive = source.closest('button, a, [role="button"], [role="link"]') || source;
       const testId = interactive.getAttribute('data-testid');
-      if (testId) return `[data-testid="${escapeCss(testId)}"]`;
-      if (interactive.id) return `#${escapeCss(interactive.id)}`;
+      if (testId) return '[data-testid="' + escapeCss(testId) + '"]';
+      if (interactive.id) return '#' + escapeCss(interactive.id);
 
       const ariaLabel = interactive.getAttribute('aria-label');
-      if (ariaLabel) return `[aria-label="${ariaLabel.replace(/"/g, '\\"')}"]`;
+      if (ariaLabel) return '[aria-label="' + ariaLabel.replace(/"/g, '\\"') + '"]';
 
       const name = interactive.getAttribute('name');
       const tag = interactive.tagName.toLowerCase();
       if (name) {
-        const selector = `${tag}[name="${name.replace(/"/g, '\\"')}"]`;
+        const selector = tag + '[name="' + name.replace(/"/g, '\\"') + '"]';
         if (document.querySelectorAll(selector).length === 1) return selector;
       }
 
@@ -40,34 +46,36 @@ async function captureSnapshot(page: Page, afterStep: string): Promise<DomSnapsh
         .split(/\s+/)
         .filter(Boolean)
         .slice(0, 4)
-        .map(className => `.${escapeCss(className)}`)
+        .map(function (className) { return '.' + escapeCss(className); })
         .join('');
       if (classes) {
-        const selector = `${tag}${classes}`;
+        const selector = tag + classes;
         if (document.querySelectorAll(selector).length === 1) return selector;
       }
 
-      const path: string[] = [];
-      let current: Element | null = interactive;
+      const path = [];
+      let current = interactive;
       while (current && current !== document.body && path.length < 5) {
         const currentTag = current.tagName.toLowerCase();
         const siblings = current.parentElement
-          ? Array.from(current.parentElement.children).filter(child => child.tagName === current!.tagName)
+          ? Array.from(current.parentElement.children).filter(function (child) {
+              return child.tagName === current.tagName;
+            })
           : [];
-        const position = siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(current) + 1})` : '';
-        path.unshift(`${currentTag}${position}`);
+        const position = siblings.length > 1 ? ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')' : '';
+        path.unshift(currentTag + position);
         current = current.parentElement;
       }
       return path.length ? path.join(' > ') : undefined;
-    };
+    }
 
-    return nodes.map(node => {
-      const htmlNode = node as HTMLElement;
+    return nodes.map(function (node) {
+      const htmlNode = node;
       const interactive = node.closest('button, a, [role="button"], [role="link"]');
-      let ancestor: Element | null = node;
-      let nearbyInput: HTMLInputElement | null = null;
+      let ancestor = node;
+      let nearbyInput = null;
       for (let depth = 0; ancestor && depth < 5 && !nearbyInput; depth++) {
-        nearbyInput = ancestor.querySelector('input') as HTMLInputElement | null;
+        nearbyInput = ancestor.querySelector('input');
         ancestor = ancestor.parentElement;
       }
 
@@ -84,25 +92,29 @@ async function captureSnapshot(page: Page, afterStep: string): Promise<DomSnapsh
 
       return {
         tag: node.tagName.toLowerCase(),
-        type: (node as HTMLInputElement).type || undefined,
-        role: node.getAttribute('role') || interactive?.getAttribute('role') || undefined,
+        type: node.type || undefined,
+        role: node.getAttribute('role') || (interactive && interactive.getAttribute('role')) || undefined,
         placeholder: node.getAttribute('placeholder') || undefined,
-        ariaLabel: node.getAttribute('aria-label') || interactive?.getAttribute('aria-label') || undefined,
+        ariaLabel: node.getAttribute('aria-label') || (interactive && interactive.getAttribute('aria-label')) || undefined,
         text: (node.textContent || '').trim().substring(0, 100),
-        testId: node.getAttribute('data-testid') || interactive?.getAttribute('data-testid') || undefined,
-        id: node.id || interactive?.id || undefined,
-        name: (node as HTMLInputElement).name || undefined,
-        className: (node.getAttribute('class') || interactive?.getAttribute('class') || '').substring(0, 120) || undefined,
-        title: node.getAttribute('title') || interactive?.getAttribute('title') || undefined,
+        testId: node.getAttribute('data-testid') || (interactive && interactive.getAttribute('data-testid')) || undefined,
+        id: node.id || (interactive && interactive.id) || undefined,
+        name: node.name || undefined,
+        className: (node.getAttribute('class') || (interactive && interactive.getAttribute('class')) || '').substring(0, 120) || undefined,
+        title: node.getAttribute('title') || (interactive && interactive.getAttribute('title')) || undefined,
         accessibleName,
-        nearbyInputPlaceholder: nearbyInput?.placeholder || nearbyInput?.name || undefined,
+        nearbyInputPlaceholder: (nearbyInput && (nearbyInput.placeholder || nearbyInput.name)) || undefined,
         selector: uniqueSelector(node),
         isVisible,
       };
     });
-  });
+  })()
+`;
 
-  return { url: page.url(), afterStep, elements: elements as ElementInfo[] };
+export async function captureSnapshot(page: Page, afterStep: string): Promise<DomSnapshot> {
+  const elements = await page.evaluate(CAPTURE_SNAPSHOT_SCRIPT) as ElementInfo[];
+
+  return { url: page.url(), afterStep, elements };
 }
 
 function locatorCandidates(page: Page, resolution: ResolvedLocator, target: string): Locator[] {

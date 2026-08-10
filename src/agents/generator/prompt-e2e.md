@@ -28,11 +28,12 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
    - **TUYỆT ĐỐI CẤM**: `page.waitForTimeout()`, `setTimeout()`. Lợi dụng tính năng Auto-waiting của Playwright.
 4. **ASSERTION BẮT BUỘC**:
    - Sử dụng `await expect(locator).toHaveText()`, `toHaveURL()`, `toBeVisible()`, `toContainText()`.
-5. **GIỮ ĐÚNG DỮ LIỆU TEST NHƯNG KHÔNG ĐƯỢC HARD-CODE SECRET**:
-   - URL môi trường, username, password và token PHẢI đọc từ `process.env` (ví dụ: `E2E_BASE_URL`, `E2E_USERNAME`, `E2E_PASSWORD`).
-   - Giá trị trong biến môi trường phải tương ứng chính xác dữ liệu kịch bản; không thay bằng dữ liệu tự đoán.
-   - CAM đưa mật khẩu vào tên test, source code, log hoặc comment.
-   - Với dữ liệu không bí mật như chuỗi validation, giá trị biên hoặc payload kiểm thử bảo mật, có thể giữ literal trong test.
+5. **GIỮ NGUYÊN DỮ LIỆU CỦA TỪNG KỊCH BẢN**:
+   - URL, username, password và mọi giá trị nhập PHẢI lấy chính xác từ KỊCH BẢN GỐC của lần chạy hiện tại.
+   - Ghi các giá trị này trực tiếp vào file `.spec.ts` sinh tự động; KHÔNG thay bằng `process.env`, placeholder hoặc dữ liệu tự đoán.
+   - File E2E sinh tự động nằm trong `tests/e2e/generated/` và không được commit lên Git.
+   - CẤM đưa password vào tên test, comment hoặc `console.log`; password chỉ xuất hiện tại bước nhập/assertion mà kịch bản yêu cầu.
+   - Chuỗi phải được escape thành TypeScript hợp lệ nếu dữ liệu có dấu nháy, dấu gạch chéo hoặc ký tự đặc biệt.
 6. **MÃ NGUỒN HOÀN CHỈNH**:
    - **CẤM** sử dụng ký hiệu gạch ba chấm `...`, `// TODO`, `// your code here`.
 7. **XỬ LÝ DROPDOWN / PHẦN TỬ ẨN**:
@@ -63,7 +64,7 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
    - **TUYỆT ĐỐI CẤM tự thêm**: Không tự ý sinh thêm test cases ngoài kịch bản (ví dụ không tự thêm TC_02 "Đăng nhập thất bại" khi kịch bản chỉ có TC_01).
 14. **QUY TAC ASSERTION CHO INPUT VA ICON (CUC KY QUAN TRONG)**:
    - **Input Fields (`getByPlaceholder`, `getByRole('textbox')`, `locator('input')`)**: `<input>` KHONG co textContent. BAT BUOC dung:
-     - Kiem tra gia tri: `await expect(page.getByPlaceholder('...')).toHaveValue(process.env.E2E_PASSWORD!);`
+     - Kiem tra gia tri: `await expect(page.getByPlaceholder('...')).toHaveValue('gia_tri_chinh_xac_tu_kich_ban');`
      - Kiem tra type input: `await expect(page.getByPlaceholder('...')).toHaveAttribute('type', 'text');`
      - CAM dung `.toContainText()` hay `.toHaveText()` tren `<input>` (se luon nhan ve chuoi rong "").
    - **Icon Con Mat (An/Hien mat khau o trang Dang nhap)**:
@@ -91,16 +92,8 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
 15. **QUẢN LÝ PHIÊN ĐĂNG NHẬP (AUTHENTICATION & SESSION SHARING - CỰC KỲ QUAN TRỌNG)**:
    - Trong Playwright, mỗi `test('...', ...)` chạy ở một Trình duyệt sạch (Clean Isolated Context) nên sẽ MẤT phiên đăng nhập.
    - Nếu kịch bản có các bước nghiệp vụ quản trị sau đăng nhập (như TC_02: Thêm tổ chức, TC_03: Sửa danh mục...):
-   - **BẮT BUỘC KHAI BÁO HÀM LOGIN HELPER**:
-     ```typescript
-     async function login(page) {
-       await page.goto(process.env.E2E_BASE_URL!);
-       await page.getByPlaceholder('Nhập tên đăng nhập').fill(process.env.E2E_USERNAME!);
-       await page.getByPlaceholder('Nhập mật khẩu').fill(process.env.E2E_PASSWORD!);
-       await page.getByRole('button', { name: 'Đăng nhập' }).click();
-       await expect(page).not.toHaveURL(/.*(dang-nhap|login).*/i);
-     }
-     ```
+   - **BẮT BUỘC KHAI BÁO HÀM LOGIN HELPER** dùng chính xác URL, username và password có trong KỊCH BẢN GỐC của lần chạy hiện tại.
+   - KHÔNG dùng `process.env` và KHÔNG tự tạo dữ liệu đăng nhập nếu kịch bản chưa cung cấp.
    - Trong các test case nghiệp vụ nội bộ (như TC_02, TC_03...), **luôn luôn gọi `await login(page)` ở đầu test case** trước khi truy cập trang nghiệp vụ nội bộ (`page.goto(...)`), để đảm bảo không bị văng ra lại trang đăng nhập!
 16. **TUYỆT ĐỐI KHÔNG ĐOÁN MÒ URL (STRICT EXACT URL MATCHING)**:
    - Khi kịch bản người dùng ghi rõ `- Mở URL: https://domain/path/abc`, bạn **BẮT BUỘC** dùng chính xác URL đó: `await page.goto('https://domain/path/abc');`.

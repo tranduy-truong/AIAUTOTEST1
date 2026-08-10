@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { fixCommonPlaywrightIssues } from '../../src/agents/generator/run.js';
+import path from 'path';
+import { fixCommonPlaywrightIssues, getGeneratedTestDirectory } from '../../src/agents/generator/run.js';
+
+describe('getGeneratedTestDirectory', () => {
+  it('isolates generated E2E specs from tracked source files', () => {
+    expect(getGeneratedTestDirectory('e2e', '/workspace')).toBe(
+      path.join('/workspace', 'tests', 'e2e', 'generated'),
+    );
+    expect(getGeneratedTestDirectory('unit', '/workspace')).toBe(
+      path.join('/workspace', 'tests', 'unit'),
+    );
+  });
+});
 
 describe('fixCommonPlaywrightIssues password visibility', () => {
   it('replaces value-based visibility assertions with input type assertions', () => {

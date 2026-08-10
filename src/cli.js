@@ -115,8 +115,8 @@ Vi du:
   URL: https://staging.example.com/login
   TC_01: Dang nhap thanh cong
   - Mo URL
-  - Nhap '<test_username>' vao o 'Nhap ten dang nhap'
-  - Nhap '<test_password>' vao o 'Nhap mat khau'
+  - Nhap 'demo_user' vao o 'Nhap ten dang nhap'
+  - Nhap 'demo_password' vao o 'Nhap mat khau'
   - Bam nut 'Dang nhap'
   - Kiem tra: URL khong con chua 'dang-nhap'
 -----------------------------------------------------------------
@@ -282,7 +282,7 @@ async function runTests(level) {
 
   // Xác định lệnh chạy theo tầng
   let command = "";
-  if (level === "e2e") command = "npx playwright test";
+  if (level === "e2e") command = "npx playwright test tests/e2e/generated";
   else if (level === "integration")
     command = "npx vitest run tests/integration";
   else if (level === "unit") command = "npx vitest run tests/unit";

@@ -5,6 +5,15 @@ import { OpenAIAdapter } from "../../adapters/openai.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+export function getGeneratedTestDirectory(
+  level: "unit" | "integration" | "e2e",
+  cwd = process.cwd(),
+): string {
+  return level === "e2e"
+    ? path.join(cwd, "tests", "e2e", "generated")
+    : path.join(cwd, "tests", level);
+}
+
 export async function runGenerator(
   level: "unit" | "integration" | "e2e",
   targetFileName: string,
@@ -131,8 +140,14 @@ test.describe('Product', () => {
       ? codeMatch[1].trim()
       : result.rawOutput.trim();
 
-    const outDir = path.join(process.cwd(), "tests", level);
+    const outDir = getGeneratedTestDirectory(level);
+    // E2E là output tạm theo từng kịch bản. Dọn suite cũ để lần chạy kế tiếp
+    // không vô tình chạy lại test của website trước đó.
+    if (level === "e2e") {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+    const displayOutDir = path.relative(process.cwd(), outDir).replace(/\\/g, "/");
 
     // 6. Tách nhiều file nếu AI dùng marker "// FILE: ..."
     const fileMarkerRegex = /\/\/ FILE:\s*(\S+)/g;
@@ -180,7 +195,7 @@ test.describe('Product', () => {
       }
 
       console.log(
-        `\n✅ Sinh code thành công! ${savedFiles.length} file lưu tại: tests/${level}/`,
+        `\n✅ Sinh code thành công! ${savedFiles.length} file lưu tại: ${displayOutDir}/`,
       );
     } else {
       // Trường hợp AI chỉ sinh 1 file (hoặc không dùng marker)
