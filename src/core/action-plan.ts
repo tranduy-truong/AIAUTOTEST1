@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ParsedAssertion, ParsedTestCase, ParsedStep, parseAssertions } from './step-parser.js';
-import { DomSnapshot, resolveLocator } from './locator-resolver.js';
+import { DomSnapshot, ResolvedLocator, resolveLocator } from './locator-resolver.js';
 
 export interface ResolvedAction {
   stepIndex: number;
@@ -24,12 +24,57 @@ export interface ActionPlan {
   }[];
 }
 
+function normalizedPageUrl(value: string | undefined): string {
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    const pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return `${url.origin}${pathname}`;
+  } catch {
+    return value.replace(/[?#].*$/, '').replace(/\/+$/, '');
+  }
+}
+
+function confidenceRank(confidence: ResolvedLocator['confidence']): number {
+  return confidence === 'high' ? 3 : confidence === 'medium' ? 2 : 1;
+}
+
+/**
+ * A login suite repeatedly visits the same page. One headless navigation may
+ * capture an incomplete DOM while another test case captures the controls
+ * correctly. Reuse that real evidence for the same URL instead of either
+ * guessing a locator or disabling every repeated test case.
+ */
+function resolveWithSharedEvidence(
+  step: ParsedStep,
+  currentSnapshot: DomSnapshot | undefined,
+  pageUrl: string,
+  sharedSnapshots: DomSnapshot[],
+): ResolvedLocator {
+  let best = resolveLocator(step.type, step.target || '', currentSnapshot);
+  if (best.confidence !== 'low') return best;
+
+  const expectedUrl = normalizedPageUrl(currentSnapshot?.url || pageUrl);
+  for (const snapshot of sharedSnapshots) {
+    if (expectedUrl && normalizedPageUrl(snapshot.url) !== expectedUrl) continue;
+
+    const candidate = resolveLocator(step.type, step.target || '', snapshot);
+    if (confidenceRank(candidate.confidence) > confidenceRank(best.confidence)) {
+      best = candidate;
+    }
+    if (best.confidence === 'high') break;
+  }
+
+  return best;
+}
+
 export function buildActionPlan(
   parsedCases: ParsedTestCase[],
   snapshotsMap: Map<string, DomSnapshot[]>,
   options: { persist?: boolean } = {},
 ): ActionPlan {
   const plan: ActionPlan = { testCases: [] };
+  const sharedSnapshots = [...snapshotsMap.values()].flat();
 
   for (const testCase of parsedCases) {
     const snapshots = snapshotsMap.get(testCase.id) || [];
@@ -57,7 +102,12 @@ export function buildActionPlan(
           break;
 
         case 'fill': {
-          const fillRes = resolveLocator('fill', step.target || '', currentSnapshot);
+          const fillRes = resolveWithSharedEvidence(
+            step,
+            currentSnapshot,
+            testCase.url || '',
+            sharedSnapshots,
+          );
           const safeFillVal = escapeSingleQuoted(step.value || '');
           playwrightCode = `await ${fillRes.locator || 'page.locator("unknown")'}.fill('${safeFillVal}');`;
           confidence = fillRes.confidence || 'medium';
@@ -67,7 +117,12 @@ export function buildActionPlan(
         }
 
         case 'click': {
-          const clickRes = resolveLocator('click', step.target || '', currentSnapshot);
+          const clickRes = resolveWithSharedEvidence(
+            step,
+            currentSnapshot,
+            testCase.url || '',
+            sharedSnapshots,
+          );
           playwrightCode = `await ${clickRes.locator || 'page.locator("unknown")'}.click();`;
           confidence = clickRes.confidence || 'medium';
           matchedBy = clickRes.matchedBy;
