@@ -166,13 +166,19 @@ describe('resolveLocator', () => {
         text: 'Tổ chức tôn giáo',
         selector: '[data-slot="select-item"][data-value="Tổ chức tôn giáo"]',
         isVisible: true,
+      }, {
+        tag: 'span',
+        dataSlot: 'select-item-text',
+        text: 'Tổ chức tôn giáo',
+        selector: '#nested-option-text',
+        isVisible: true,
       }],
     };
 
     expect(resolveLocator('option', 'Tổ chức tôn giáo', snapshot)).toMatchObject({
       locator: "page.locator('[data-slot=\"select-item\"][data-value=\"Tổ chức tôn giáo\"]')",
-      confidence: 'medium',
-      matchedBy: 'verified_option_text',
+      confidence: 'high',
+      matchedBy: 'verified_option_selector',
     });
   });
 });
