@@ -6,6 +6,8 @@ export interface ElementInfo {
   ariaLabel?: string;
   text?: string;
   testId?: string;
+  dataSlot?: string;
+  dataValue?: string;
   id?: string;
   name?: string;
   className?: string;
@@ -16,6 +18,9 @@ export interface ElementInfo {
   scopeSelector?: string;
   ariaHasPopup?: string;
   selector?: string;
+  learnedStepType?: string;
+  learnedTarget?: string;
+  learnedLocator?: string;
   isVisible: boolean;
 }
 
@@ -79,6 +84,52 @@ function uniqueVisibleMatch(
   return uniqueTargets.size === 1 ? [...uniqueTargets.values()][0] : undefined;
 }
 
+function uniqueVisibleMatchPreferringScope(
+  elements: ElementInfo[],
+  predicate: (element: ElementInfo) => boolean,
+): ElementInfo | undefined {
+  const scopedElements = elements.filter(element => element.isVisible && element.scopeSelector);
+  const scopedMatch = uniqueVisibleMatch(scopedElements, predicate);
+  return scopedMatch || uniqueVisibleMatch(elements, predicate);
+}
+
+function canonicalOptionMatch(
+  elements: ElementInfo[],
+  target: string,
+): ElementInfo | undefined {
+  const scored = elements
+    .filter(element =>
+      element.isVisible &&
+      Boolean(element.selector) &&
+      (
+        textMatches(element.text, target) ||
+        textMatches(element.accessibleName, target) ||
+        textMatches(element.dataValue, target)
+      ),
+    )
+    .map(element => {
+      const role = normalizeText(element.role || '');
+      const slot = normalizeText(element.dataSlot || '');
+      let score = 0;
+
+      if (element.tag === 'option' || role === 'option') score += 100;
+      else if (['menuitem', 'menuitemradio', 'menuitemcheckbox', 'treeitem'].includes(role)) score += 90;
+
+      if (/(?:^| )(?:item|option)$/.test(slot)) score += 70;
+      if (/(?:select|dropdown|command|combobox|listbox)/.test(slot)) score += 20;
+      if (textMatches(element.dataValue, target)) score += 30;
+      if (normalizeText(element.text || '') === target) score += 10;
+
+      return { element, score };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0) return undefined;
+  if (scored.length > 1 && scored[0].score === scored[1].score) return undefined;
+  return scored[0].element;
+}
+
 function escapeSingleQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -139,6 +190,21 @@ export function resolveLocator(
 ): ResolvedLocator {
   const target = normalizeText(stepTarget);
   const elements = dom?.elements || [];
+
+  const guidedBinding = elements.find(element =>
+    element.isVisible &&
+    element.learnedStepType === stepType &&
+    normalizeText(element.learnedTarget || '') === target &&
+    Boolean(element.learnedLocator),
+  );
+  if (guidedBinding?.learnedLocator) {
+    return {
+      locator: guidedBinding.learnedLocator,
+      confidence: 'high',
+      matchedBy: 'guided_learning',
+      element: guidedBinding,
+    };
+  }
 
   // 1. Xử lý bước 'fill' (nhập liệu)
   if (stepType === 'fill') {
@@ -306,7 +372,7 @@ export function resolveLocator(
       el.tag === 'select' || el.role === 'combobox' || el.ariaHasPopup === 'listbox';
 
     // a. Accessible label, associated label, placeholder or visible trigger text.
-    const dropdown = uniqueVisibleMatch(elements, el =>
+    const dropdown = uniqueVisibleMatchPreferringScope(elements, el =>
       isDropdown(el) && [
         el.ariaLabel,
         el.accessibleName,
@@ -349,10 +415,7 @@ export function resolveLocator(
   // 4. Resolve an option only after the Crawler opened the dropdown and
   // captured the overlay/listbox state.
   if (stepType === 'option') {
-    const option = uniqueVisibleMatch(elements, el =>
-      (el.role === 'option' || el.tag === 'option' || el.role === 'menuitem') &&
-      (textMatches(el.text, target) || textMatches(el.accessibleName, target)),
-    );
+    const option = canonicalOptionMatch(elements, target);
     if (option) {
       if (option.role === 'option' || option.tag === 'option') {
         const safeName = escapeSingleQuoted((option.accessibleName || option.text || stepTarget).trim());
