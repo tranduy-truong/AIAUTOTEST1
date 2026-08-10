@@ -12,8 +12,9 @@ import {
 export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
   (() => {
     const query = [
-      'input', 'textarea', 'select', 'button', 'a[href]', 'label', 'svg', 'i',
-      '[role]', '[aria-label]', '[data-testid]', '[title]',
+      'input', 'textarea', 'select', 'option', 'button', 'a[href]', 'label', 'svg', 'i',
+      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[title]',
+      '[onclick]', '[tabindex]',
     ].join(', ');
     const nodes = Array.from(document.querySelectorAll(query));
 
@@ -27,13 +28,16 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
     }
 
     function uniqueSelector(source) {
-      const interactive = source.closest('button, a, [role="button"], [role="link"]') || source;
+      const interactive = source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
       const testId = interactive.getAttribute('data-testid');
       if (testId) return '[data-testid="' + escapeCss(testId) + '"]';
       if (interactive.id) return '#' + escapeCss(interactive.id);
 
       const ariaLabel = interactive.getAttribute('aria-label');
-      if (ariaLabel) return '[aria-label="' + ariaLabel.replace(/"/g, '\\"') + '"]';
+      if (ariaLabel) {
+        const selector = '[aria-label="' + ariaLabel.replace(/"/g, '\\"') + '"]';
+        if (document.querySelectorAll(selector).length === 1) return selector;
+      }
 
       const name = interactive.getAttribute('name');
       const tag = interactive.tagName.toLowerCase();
@@ -71,7 +75,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
 
     return nodes.map(function (node) {
       const htmlNode = node;
-      const interactive = node.closest('button, a, [role="button"], [role="link"]');
+      const interactive = node.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]');
       let ancestor = node;
       let nearbyInput = null;
       for (let depth = 0; ancestor && depth < 5 && !nearbyInput; depth++) {
@@ -89,6 +93,13 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         interactive?.getAttribute('title') ||
         (interactive?.textContent || node.textContent || '').trim().substring(0, 100) ||
         undefined;
+      const nodeId = node.getAttribute('id');
+      const explicitLabel = nodeId
+        ? document.querySelector('label[for="' + escapeCss(nodeId) + '"]')
+        : null;
+      const wrappingLabel = node.closest('label');
+      const nearbyLabel = explicitLabel || wrappingLabel || node.parentElement?.querySelector('label');
+      const scope = node.closest('dialog, [role="dialog"], [aria-modal="true"], form, [data-slot="sheet-content"], [class*="drawer"], [class*="modal"]');
 
       return {
         tag: node.tagName.toLowerCase(),
@@ -104,6 +115,9 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         title: node.getAttribute('title') || (interactive && interactive.getAttribute('title')) || undefined,
         accessibleName,
         nearbyInputPlaceholder: (nearbyInput && (nearbyInput.placeholder || nearbyInput.name)) || undefined,
+        labelText: (nearbyLabel && nearbyLabel.textContent || '').trim().replace(/\s*\*\s*$/, '').substring(0, 100) || undefined,
+        scopeSelector: scope ? uniqueSelector(scope) : undefined,
+        ariaHasPopup: node.getAttribute('aria-haspopup') || (interactive && interactive.getAttribute('aria-haspopup')) || undefined,
         selector: uniqueSelector(node),
         isVisible,
       };
@@ -119,7 +133,7 @@ export async function captureSnapshot(page: Page, afterStep: string): Promise<Do
 
 const INTERACTIVE_SELECTOR = [
   'input', 'textarea', 'select', 'button', 'a[href]',
-  '[role]', '[aria-label]', '[data-testid]',
+  '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[tabindex]',
 ].join(', ');
 
 async function waitForInteractiveDom(page: Page): Promise<void> {
@@ -176,6 +190,9 @@ export function buildCompactDomReport(
           element.id,
           element.name,
           element.nearbyInputPlaceholder,
+          element.labelText,
+          element.scopeSelector,
+          element.ariaHasPopup,
           element.selector,
         ]);
         if (!uniqueElements.has(signature)) uniqueElements.set(signature, element);
@@ -195,7 +212,7 @@ export function buildCompactDomReport(
     `- Elements included: ${selected.length}`,
     '- Duplicate elements across test cases and states were removed.',
     '',
-    '| Tag | Type/Role | Accessible name | Placeholder | Text | Test ID/ID/Name | Nearby input | Verified selector |',
+    '| Tag | Type/Role | Accessible name | Label/Placeholder | Text | Test ID/ID/Name | Scope | Verified selector |',
     '| --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
 
@@ -204,10 +221,10 @@ export function buildCompactDomReport(
       element.tag,
       [element.type, element.role].filter(Boolean).join('/'),
       element.accessibleName || element.ariaLabel,
-      element.placeholder,
+      element.labelText || element.placeholder,
       element.text,
       element.testId || element.id || element.name,
-      element.nearbyInputPlaceholder,
+      element.scopeSelector || element.nearbyInputPlaceholder,
       element.selector,
     ].map(reportCell).join(' | ')} |`);
   }
@@ -244,9 +261,13 @@ function locatorCandidates(page: Page, resolution: ResolvedLocator, target: stri
   }
 }
 
-async function uniqueLocator(page: Page, step: ParsedStep, snapshot: DomSnapshot): Promise<Locator> {
-  const target = step.target || '';
-  const resolution = resolveLocator(step.type, target, snapshot);
+async function uniqueLocatorFor(
+  page: Page,
+  stepType: string,
+  target: string,
+  snapshot: DomSnapshot,
+): Promise<Locator> {
+  const resolution = resolveLocator(stepType, target, snapshot);
   const candidates = locatorCandidates(page, resolution, target);
 
   for (const candidate of candidates) {
@@ -259,6 +280,20 @@ async function uniqueLocator(page: Page, step: ParsedStep, snapshot: DomSnapshot
   }
 
   throw new Error(`Khong tim thay locator duy nhat cho "${target}" (${resolution.matchedBy})`);
+}
+
+async function uniqueLocator(page: Page, step: ParsedStep, snapshot: DomSnapshot): Promise<Locator> {
+  return uniqueLocatorFor(page, step.type, step.target || '', snapshot);
+}
+
+async function waitForStateSettled(page: Page): Promise<void> {
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 8000 });
+  } catch {
+    // Long-polling applications may never become network-idle.
+  }
+  await page.waitForTimeout(250);
+  await waitForInteractiveDom(page);
 }
 
 function isPotentiallyDestructive(target: string): boolean {
@@ -307,16 +342,27 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               }
               const locator = await uniqueLocator(page, step, beforeAction);
               await locator.click({ timeout: 10000 });
-              await page.waitForTimeout(500);
+              await waitForStateSettled(page);
             } else if (step.type === 'select') {
               const locator = await uniqueLocator(page, step, beforeAction);
               if (await locator.evaluate(element => element.tagName.toLowerCase() === 'select')) {
                 await locator.selectOption({ label: step.value });
               } else {
                 await locator.click({ timeout: 10000 });
-                const option = page.getByRole('option', { name: step.value || '', exact: true });
-                if (await option.count() !== 1) throw new Error(`Option "${step.value}" khong duy nhat`);
+                await waitForStateSettled(page);
+                const optionSnapshot = await captureSnapshot(
+                  page,
+                  `during step ${stepNumber}: options for ${step.raw}`,
+                );
+                snapshots.push(optionSnapshot);
+                const option = await uniqueLocatorFor(
+                  page,
+                  'option',
+                  step.value || '',
+                  optionSnapshot,
+                );
                 await option.click({ timeout: 10000 });
+                await waitForStateSettled(page);
               }
             } else if (step.type === 'wait') {
               await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
