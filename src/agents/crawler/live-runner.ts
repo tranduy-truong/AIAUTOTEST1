@@ -27,9 +27,32 @@ interface LocatorRuntime {
   guided: boolean;
 }
 
+export interface CrawlerGuidanceContext {
+  testCaseId: string;
+  testCaseName: string;
+  testCasePosition: number;
+  totalTestCases: number;
+  stepNumber: number;
+  totalSteps: number;
+  stepDescription: string;
+}
+
 const GUIDED_RESULT_KEY = '__AI_TEST_GUIDED_PICK_RESULT__';
 
-export function guidedPickScript(instruction: string): string {
+export function guidedPickScript(
+  instruction: string,
+  context?: CrawlerGuidanceContext,
+): string {
+  const bannerText = context
+    ? [
+        'CRAWLER CẦN XÁC NHẬN PHẦN TỬ',
+        `Test case: ${context.testCaseId} - ${context.testCaseName} (${context.testCasePosition}/${context.totalTestCases})`,
+        `Bước: ${context.stepNumber}/${context.totalSteps}`,
+        `Nội dung: ${context.stepDescription}`,
+        `Cần chọn: ${instruction}`,
+        'Hãy click đúng phần tử. Nhấn ESC để hủy.',
+      ].join('\n')
+    : `CRAWLER CẦN XÁC NHẬN: Click đúng phần tử cho "${instruction}". Nhấn ESC để hủy.`;
   return String.raw`
     (() => {
       const resultKey = ${JSON.stringify(GUIDED_RESULT_KEY)};
@@ -39,12 +62,13 @@ export function guidedPickScript(instruction: string): string {
 
       const banner = document.createElement('div');
       banner.id = '__ai-test-guided-banner__';
-      banner.textContent = ${JSON.stringify(`GUIDED LEARNING: Click đúng phần tử cho "${instruction}". Nhấn ESC để hủy.`)};
+      banner.textContent = ${JSON.stringify(bannerText)};
       banner.style.cssText = [
         'position:fixed', 'top:12px', 'left:50%', 'transform:translateX(-50%)',
         'z-index:2147483647', 'background:#7f1d1d', 'color:white',
-        'padding:12px 18px', 'border-radius:8px', 'font:600 14px sans-serif',
-        'box-shadow:0 4px 20px rgba(0,0,0,.35)', 'max-width:80vw',
+        'padding:14px 18px', 'border-radius:8px', 'font:600 14px/1.5 sans-serif',
+        'box-shadow:0 4px 20px rgba(0,0,0,.35)', 'width:min(760px,calc(100vw - 32px))',
+        'white-space:pre-line', 'text-align:left',
       ].join(';');
       document.documentElement.appendChild(banner);
 
@@ -472,13 +496,18 @@ async function pickGuidedLocator(
   page: Page,
   stepType: string,
   target: string,
+  guidance?: CrawlerGuidanceContext,
 ): Promise<GuidedChoice> {
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const location = guidance
+      ? `${guidance.testCaseId} (${guidance.testCasePosition}/${guidance.totalTestCases}), ` +
+        `step ${guidance.stepNumber}/${guidance.totalSteps}: ${guidance.stepDescription}`
+      : 'không có ngữ cảnh bước';
     console.log(
-      `[Crawler] Không tự xác minh được "${target}". ` +
+      `[Crawler] Cần xác nhận tại ${location}. Không tự xác minh được "${target}". ` +
       `Hãy click đúng phần tử trên browser (lần ${attempt}/3, ESC để hủy).`,
     );
-    await page.evaluate(guidedPickScript(`${stepType}: ${target}`));
+    await page.evaluate(guidedPickScript(`${stepType}: ${target}`, guidance));
     await page.waitForFunction(
       `globalThis[${JSON.stringify(GUIDED_RESULT_KEY)}] !== null`,
       undefined,
@@ -511,8 +540,9 @@ async function learnGuidedLocatorFor(
   snapshot: DomSnapshot,
   runtime: LocatorRuntime,
   context?: string,
+  guidance?: CrawlerGuidanceContext,
 ): Promise<Locator> {
-  const choice = await pickGuidedLocator(page, stepType, target);
+  const choice = await pickGuidedLocator(page, stepType, target, guidance);
   rememberLearnedLocator(runtime.registry, {
     pageUrl: page.url(),
     stepType,
@@ -532,6 +562,7 @@ async function uniqueLocatorFor(
   snapshot: DomSnapshot,
   runtime: LocatorRuntime,
   context?: string,
+  guidance?: CrawlerGuidanceContext,
 ): Promise<Locator> {
   const learned = findLearnedLocator(
     runtime.registry,
@@ -567,7 +598,7 @@ async function uniqueLocatorFor(
   }
 
   if (runtime.guided) {
-    return learnGuidedLocatorFor(page, stepType, target, snapshot, runtime, context);
+    return learnGuidedLocatorFor(page, stepType, target, snapshot, runtime, context, guidance);
   }
 
   throw new Error(`Khong tim thay locator duy nhat cho "${target}" (${resolution.matchedBy})`);
@@ -578,8 +609,26 @@ async function uniqueLocator(
   step: ParsedStep,
   snapshot: DomSnapshot,
   runtime: LocatorRuntime,
+  guidance?: CrawlerGuidanceContext,
 ): Promise<Locator> {
-  return uniqueLocatorFor(page, step.type, step.target || '', snapshot, runtime);
+  return uniqueLocatorFor(page, step.type, step.target || '', snapshot, runtime, undefined, guidance);
+}
+
+export function describeStepForGuidance(step: ParsedStep): string {
+  switch (step.type) {
+    case 'fill':
+      return `Nhập dữ liệu vào ô "${step.target || 'không xác định'}"`;
+    case 'select':
+      return `Chọn "${step.value || 'không xác định'}" trong dropdown "${step.target || 'không xác định'}"`;
+    case 'click':
+      return `Bấm "${step.target || 'không xác định'}"`;
+    case 'goto':
+      return `Mở URL ${step.url || ''}`;
+    case 'check':
+      return 'Kiểm tra kết quả mong đợi';
+    case 'wait':
+      return 'Chờ trang sẵn sàng';
+  }
 }
 
 async function locatorIsUniqueAndVisible(locator: Locator): Promise<boolean> {
@@ -770,8 +819,11 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
     console.log(`[Live Runner] Che do trinh duyet: ${headless ? 'headless' : 'headed'}`);
     browser = await chromium.launch({ headless });
 
-    for (const testCase of testCases) {
-      console.log(`[Live Runner] Dang thu thap DOM cho ${testCase.id}...`);
+    for (const [testCaseIndex, testCase] of testCases.entries()) {
+      console.log(
+        `[Live Runner] Dang thu thap DOM cho ${testCase.id} - ${testCase.name} ` +
+        `(${testCaseIndex + 1}/${testCases.length})...`,
+      );
       const snapshots: DomSnapshot[] = [];
       let abortRemainingSteps = false;
       // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
@@ -783,6 +835,15 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
           if (abortRemainingSteps) break;
           const step = testCase.steps[index];
           const stepNumber = index + 1;
+          const guidance: CrawlerGuidanceContext = {
+            testCaseId: testCase.id,
+            testCaseName: testCase.name,
+            testCasePosition: testCaseIndex + 1,
+            totalTestCases: testCases.length,
+            stepNumber,
+            totalSteps: testCase.steps.length,
+            stepDescription: describeStepForGuidance(step),
+          };
 
           try {
             if (step.type === 'goto') {
@@ -808,19 +869,19 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
             snapshots.push(beforeAction);
 
             if (step.type === 'fill') {
-              const locator = await uniqueLocator(page, step, beforeAction, runtime);
+              const locator = await uniqueLocator(page, step, beforeAction, runtime, guidance);
               await locator.fill(step.value || '', { timeout: 10000 });
             } else if (step.type === 'click') {
               if (isPotentiallyDestructive(step.target || '')) {
                 // Resolve the locator from the current DOM but never execute the
                 // destructive action. ActionPlan can therefore generate the
                 // verified click without the Crawler mutating production data.
-                await uniqueLocator(page, step, beforeAction, runtime);
+                await uniqueLocator(page, step, beforeAction, runtime, guidance);
                 console.warn(`[Live Runner]   VERIFY-ONLY step ${stepNumber}: khong thuc thi hanh dong thay doi du lieu`);
                 continue;
               }
               const declaredAuthProbe = protectedGotoAfterLogin(testCase.steps, index);
-              const locator = await uniqueLocator(page, step, beforeAction, runtime);
+              const locator = await uniqueLocator(page, step, beforeAction, runtime, guidance);
               await locator.click({ timeout: 10000 });
               if (declaredAuthProbe) {
                 console.log(`[Live Runner]   Dang cho website xac nhan dang nhap tai step ${stepNumber}...`);
@@ -853,7 +914,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                 snapshots.push(readySnapshot);
               }
             } else if (step.type === 'select') {
-              let locator = await uniqueLocator(page, step, beforeAction, runtime);
+              let locator = await uniqueLocator(page, step, beforeAction, runtime, guidance);
               if (await locator.evaluate(element => element.tagName.toLowerCase() === 'select')) {
                 await locator.selectOption({ label: step.value });
               } else {
@@ -887,6 +948,8 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                     step.target || '',
                     beforeAction,
                     runtime,
+                    undefined,
+                    guidance,
                   );
                   await locator.click({ timeout: 10000 });
                   await waitForStateSettled(page);
@@ -914,6 +977,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                   optionSnapshot,
                   runtime,
                   step.target,
+                  guidance,
                 );
                 await option.click({ timeout: 10000 });
                 await waitForStateSettled(page);
