@@ -396,6 +396,12 @@ export interface CrawlerFailure {
   reason: string;
 }
 
+export function crawlerRunsHeadless(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return String(env.E2E_CRAWLER_HEADLESS ?? 'true').toLowerCase() !== 'false';
+}
+
 function writeCrawlerFailures(failures: CrawlerFailure[]): void {
   const artifactsDir = path.join(process.cwd(), 'artifacts');
   if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
@@ -412,7 +418,9 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
   let browser: Browser | null = null;
 
   try {
-    browser = await chromium.launch({ headless: true });
+    const headless = crawlerRunsHeadless();
+    console.log(`[Live Runner] Che do trinh duyet: ${headless ? 'headless' : 'headed'}`);
+    browser = await chromium.launch({ headless });
 
     for (const testCase of testCases) {
       console.log(`[Live Runner] Dang thu thap DOM cho ${testCase.id}...`);
