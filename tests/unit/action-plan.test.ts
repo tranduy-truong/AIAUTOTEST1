@@ -148,7 +148,7 @@ describe('buildActionPlan', () => {
     expect(repeatedActions[2]).toMatchObject({
       confidence: 'high',
       matchedBy: 'role+name',
-      playwrightCode: "await page.getByRole('button', { name: 'Đăng nhập' }).click();",
+      playwrightCode: "await page.getByRole('button', { name: 'Đăng nhập', exact: true }).click();",
     });
   });
 
