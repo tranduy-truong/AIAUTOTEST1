@@ -1,6 +1,6 @@
 
 # Playwright
-node_modules/
+node_modules
 /test-results/
 /playwright-report/
 /blob-report/
@@ -16,6 +16,9 @@ node_modules/
 /artifacts/test-plan-*.md
 /artifacts/test-plan-*.invalid.txt
 /artifacts/action-plan.json
+/artifacts/crawler-failures.json
+/artifacts/unresolved-actions.json
+/artifacts/locator-registry.json
 /artifacts/report.md
 /screenshots/
 *.log
