@@ -5,6 +5,7 @@ import {
   crawlerRunsHeadless,
   isPotentiallyDestructive,
   isLoginUrl,
+  loginStepBeforeProtectedGoto,
   nextStateStep,
   protectedGotoAfterLogin,
 } from '../../src/agents/crawler/live-runner.js';
@@ -152,6 +153,36 @@ describe('state-aware crawler policy', () => {
     expect(protectedGotoAfterLogin(steps, 0)).toEqual({
       step: steps[1],
       stepNumber: 2,
+    });
+    expect(loginStepBeforeProtectedGoto(steps, 1)).toEqual({
+      step: steps[0],
+      stepNumber: 1,
+    });
+  });
+
+  it('keeps authentication verification across intermediate wait/check steps', () => {
+    const steps: ParsedStep[] = [
+      { type: 'click', target: 'Đăng nhập', raw: "- Bấm nút 'Đăng nhập'" },
+      { type: 'wait', raw: '- Chờ trang load xong' },
+      {
+        type: 'check',
+        assertion: "URL không còn chứa 'dang-nhap'",
+        raw: '- Kiểm tra đăng nhập',
+      },
+      {
+        type: 'goto',
+        url: 'https://example.com/quan-tri/to-chuc',
+        raw: '- Mở URL trang tổ chức',
+      },
+    ];
+
+    expect(protectedGotoAfterLogin(steps, 0)).toEqual({
+      step: steps[3],
+      stepNumber: 4,
+    });
+    expect(loginStepBeforeProtectedGoto(steps, 3)).toEqual({
+      step: steps[0],
+      stepNumber: 1,
     });
   });
 
