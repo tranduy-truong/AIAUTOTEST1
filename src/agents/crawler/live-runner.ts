@@ -374,6 +374,24 @@ export function protectedGotoAfterLogin(
   return { step: next, stepNumber: currentIndex + 2 };
 }
 
+async function waitForAuthenticationTransition(
+  page: Page,
+  loginControl: Locator,
+  timeout = 15000,
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() <= deadline) {
+    if (!isLoginUrl(page.url())) return;
+    if (!await loginControl.isVisible().catch(() => false)) return;
+    await page.waitForTimeout(200);
+  }
+
+  throw new Error(
+    'AUTHENTICATION_FAILED: URL van o trang dang nhap va form dang nhap van hien thi',
+  );
+}
+
 async function waitForStateSettled(page: Page): Promise<void> {
   try {
     await page.waitForLoadState('networkidle', { timeout: 8000 });
@@ -425,7 +443,6 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
     for (const testCase of testCases) {
       console.log(`[Live Runner] Dang thu thap DOM cho ${testCase.id}...`);
       const snapshots: DomSnapshot[] = [];
-      let preExecutedGotoIndex: number | undefined;
       let abortRemainingSteps = false;
       // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
       const context = await browser.newContext();
@@ -440,11 +457,18 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
           try {
             if (step.type === 'goto') {
               if (!step.url) throw new Error('Buoc goto khong co URL');
-              if (preExecutedGotoIndex !== index) {
-                await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
-              }
-              preExecutedGotoIndex = undefined;
+              await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
               await waitForStateSettled(page);
+
+              const declaredAuthProbe = index > 0
+                ? protectedGotoAfterLogin(testCase.steps, index - 1)
+                : undefined;
+              if (declaredAuthProbe?.stepNumber === stepNumber && isLoginUrl(page.url())) {
+                throw new Error(
+                  `AUTHENTICATION_FAILED: website chuyen ve trang dang nhap khi mo ${step.url}`,
+                );
+              }
+
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
               continue;
             }
@@ -465,28 +489,13 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                 console.warn(`[Live Runner]   VERIFY-ONLY step ${stepNumber}: khong thuc thi hanh dong thay doi du lieu`);
                 continue;
               }
+              const declaredAuthProbe = protectedGotoAfterLogin(testCase.steps, index);
               const locator = await uniqueLocator(page, step, beforeAction);
               await locator.click({ timeout: 10000 });
-              await waitForStateSettled(page);
-
-              // A successful click is not proof that authentication succeeded.
-              // When the scenario immediately opens a protected URL, execute
-              // that declared navigation as the auth probe. Redirecting back to
-              // login is explicit evidence of an invalid/missing auth session.
-              const protectedGoto = protectedGotoAfterLogin(testCase.steps, index);
-              if (protectedGoto?.step.url) {
-                await page.goto(protectedGoto.step.url, {
-                  timeout: 15000,
-                  waitUntil: 'domcontentloaded',
-                });
-                await waitForStateSettled(page);
-                if (isLoginUrl(page.url())) {
-                  throw new Error(
-                    `AUTHENTICATION_FAILED: website chuyen ve trang dang nhap khi mo ${protectedGoto.step.url}`,
-                  );
-                }
-                preExecutedGotoIndex = protectedGoto.stepNumber - 1;
+              if (declaredAuthProbe) {
+                await waitForAuthenticationTransition(page, locator);
               }
+              await waitForStateSettled(page);
 
               const expectedState = nextStateStep(testCase.steps, index);
               if (expectedState) {
