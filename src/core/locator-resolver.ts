@@ -6,6 +6,8 @@ export interface ElementInfo {
   ariaLabel?: string;
   text?: string;
   testId?: string;
+  dataSlot?: string;
+  dataValue?: string;
   id?: string;
   name?: string;
   className?: string;
@@ -77,6 +79,15 @@ function uniqueVisibleMatch(
     if (!uniqueTargets.has(key)) uniqueTargets.set(key, element);
   }
   return uniqueTargets.size === 1 ? [...uniqueTargets.values()][0] : undefined;
+}
+
+function uniqueVisibleMatchPreferringScope(
+  elements: ElementInfo[],
+  predicate: (element: ElementInfo) => boolean,
+): ElementInfo | undefined {
+  const scopedElements = elements.filter(element => element.isVisible && element.scopeSelector);
+  const scopedMatch = uniqueVisibleMatch(scopedElements, predicate);
+  return scopedMatch || uniqueVisibleMatch(elements, predicate);
 }
 
 function escapeSingleQuoted(value: string): string {
@@ -306,7 +317,7 @@ export function resolveLocator(
       el.tag === 'select' || el.role === 'combobox' || el.ariaHasPopup === 'listbox';
 
     // a. Accessible label, associated label, placeholder or visible trigger text.
-    const dropdown = uniqueVisibleMatch(elements, el =>
+    const dropdown = uniqueVisibleMatchPreferringScope(elements, el =>
       isDropdown(el) && [
         el.ariaLabel,
         el.accessibleName,
@@ -351,7 +362,11 @@ export function resolveLocator(
   if (stepType === 'option') {
     const option = uniqueVisibleMatch(elements, el =>
       (el.role === 'option' || el.tag === 'option' || el.role === 'menuitem') &&
-      (textMatches(el.text, target) || textMatches(el.accessibleName, target)),
+      (
+        textMatches(el.text, target) ||
+        textMatches(el.accessibleName, target) ||
+        textMatches(el.dataValue, target)
+      ),
     );
     if (option) {
       if (option.role === 'option' || option.tag === 'option') {
