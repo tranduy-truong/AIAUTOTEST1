@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseAssertions, parseScript } from '../../src/core/step-parser.js';
+import {
+  extractHttpUrl,
+  parseAssertions,
+  parseScript,
+  validateParsedScript,
+} from '../../src/core/step-parser.js';
 
 describe('parseScript', () => {
   it('keeps quoted values, annotations and unicode bullets', () => {
@@ -64,5 +69,44 @@ describe('parseScript', () => {
 
     expect(cases[0].id).toBe('TC_LOGIN_07');
     expect(cases[0].steps[0].assertions).toHaveLength(2);
+  });
+
+  it('parses a stateful organization flow written in natural Vietnamese', () => {
+    const loginUrl = 'https://example.com/app/dang-nhap';
+    const organizationUrl = 'https://example.com/app/quan-tri/to-chuc';
+    const cases = parseScript([
+      'TC_01: Thêm tổ chức thành công',
+      `- Mở URL: [${loginUrl}](${loginUrl})`,
+      "- Nhập 'test' vào ô 'Nhập tên đăng nhập'",
+      "- Nhập 'Abc@12345' vào ô 'Nhập mật khẩu'",
+      "- Bấm nút 'Đăng nhập'",
+      `- Mở URL: [${organizationUrl}](${organizationUrl})`,
+      '- Bấm nút có chữ "Thêm"',
+      "- Nhập 'Tổ chức Test' vào ô 'Nhập tên tổ chức'",
+      '- Tên quốc tế, tên viết tắt bỏ trống',
+      "- Dropdown chọn loại hình tổ chức, chọn 'Tổ chức tôn giáo'",
+      "- Dropdown chọn tôn giáo, chọn 'Công giáo'",
+      "- Nhấn nút 'Lưu'",
+      "- Kiểm tra: Có thông báo 'Thành công' xuất hiện",
+    ].join('\n'));
+
+    expect(cases[0].steps.map(step => step.type)).toEqual([
+      'goto', 'fill', 'fill', 'click', 'goto', 'click', 'fill', 'select', 'select', 'click', 'check',
+    ]);
+    expect(cases[0].steps[0].url).toBe(loginUrl);
+    expect(cases[0].steps[4].url).toBe(organizationUrl);
+    expect(cases[0].steps[7]).toMatchObject({
+      target: 'loại hình tổ chức',
+      value: 'Tổ chức tôn giáo',
+    });
+    expect(cases[0].steps[8]).toMatchObject({ target: 'tôn giáo', value: 'Công giáo' });
+    expect(cases[0].steps[9]).toMatchObject({ type: 'click', target: 'Lưu' });
+    expect(validateParsedScript(cases)).toEqual([]);
+  });
+
+  it('extracts a plain URL from Markdown without retaining link syntax', () => {
+    expect(extractHttpUrl('[https://example.com/a](https://example.com/a)')).toBe(
+      'https://example.com/a',
+    );
   });
 });
