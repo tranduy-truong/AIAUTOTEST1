@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCompactDomReport,
   CAPTURE_SNAPSHOT_SCRIPT,
+  crawlerRunsHeadless,
   isPotentiallyDestructive,
   isLoginUrl,
   nextStateStep,
@@ -154,5 +155,11 @@ describe('state-aware crawler policy', () => {
     expect(protectedGotoAfterLogin(steps, 0)).toBeUndefined();
     expect(isLoginUrl('https://example.com/dang-nhap?redirect=%2Fadmin')).toBe(true);
     expect(isLoginUrl('https://example.com/quan-tri/to-chuc')).toBe(false);
+  });
+
+  it('allows headed crawler diagnostics without changing website credentials', () => {
+    expect(crawlerRunsHeadless({})).toBe(true);
+    expect(crawlerRunsHeadless({ E2E_CRAWLER_HEADLESS: 'false' })).toBe(false);
+    expect(crawlerRunsHeadless({ E2E_CRAWLER_HEADLESS: 'FALSE' })).toBe(false);
   });
 });
