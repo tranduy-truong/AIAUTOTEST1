@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCompactDomReport,
   CAPTURE_SNAPSHOT_SCRIPT,
+  isPotentiallyDestructive,
+  nextStateStep,
 } from '../../src/agents/crawler/live-runner.js';
+import type { ParsedStep } from '../../src/core/step-parser.js';
 
 describe('browser snapshot script', () => {
   it('executes without relying on tsx helpers such as __name', () => {
@@ -89,5 +92,38 @@ describe('buildCompactDomReport', () => {
     expect(report).toContain('Snapshots captured: 47');
     expect(report).toContain('Unique visible elements: 1');
     expect(report.match(/#username/g)).toHaveLength(1);
+  });
+});
+
+describe('state-aware crawler policy', () => {
+  it('uses the next actionable step as the expected UI state after a click', () => {
+    const steps: ParsedStep[] = [
+      { type: 'click', target: 'Thêm', raw: "- Bấm nút 'Thêm'" },
+      {
+        type: 'fill',
+        target: 'Nhập tên tổ chức',
+        value: 'Tổ chức Test',
+        raw: "- Nhập 'Tổ chức Test' vào ô 'Nhập tên tổ chức'",
+      },
+    ];
+
+    expect(nextStateStep(steps, 0)).toEqual({ step: steps[1], stepNumber: 2 });
+  });
+
+  it('does not wait across an explicit navigation or assertion boundary', () => {
+    const steps: ParsedStep[] = [
+      { type: 'click', target: 'Đăng nhập', raw: "- Bấm nút 'Đăng nhập'" },
+      { type: 'goto', url: 'https://example.com/to-chuc', raw: '- Mở URL trang tổ chức' },
+      { type: 'fill', target: 'Nhập tên tổ chức', value: 'Test', raw: '- Nhập tên' },
+    ];
+
+    expect(nextStateStep(steps, 0)).toBeUndefined();
+  });
+
+  it('verifies destructive controls without executing them', () => {
+    expect(isPotentiallyDestructive('Lưu')).toBe(true);
+    expect(isPotentiallyDestructive('Xóa tổ chức')).toBe(true);
+    expect(isPotentiallyDestructive('Thêm')).toBe(false);
+    expect(isPotentiallyDestructive('Đăng nhập')).toBe(false);
   });
 });
