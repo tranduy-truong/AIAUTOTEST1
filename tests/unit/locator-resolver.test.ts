@@ -70,4 +70,58 @@ describe('resolveLocator', () => {
       confidence: 'high',
     });
   });
+
+  it('resolves a custom dropdown trigger and option from separate DOM states', () => {
+    const triggerSnapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'before dropdown',
+      elements: [{
+        tag: 'button',
+        role: 'combobox',
+        accessibleName: 'Chọn loại hình tổ chức',
+        labelText: 'Loại hình tổ chức',
+        ariaHasPopup: 'listbox',
+        selector: '#organization-type',
+        isVisible: true,
+      }],
+    };
+    const optionSnapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'dropdown opened',
+      elements: [{
+        tag: 'div',
+        role: 'option',
+        text: 'Tổ chức tôn giáo',
+        accessibleName: 'Tổ chức tôn giáo',
+        selector: '#religious-option',
+        isVisible: true,
+      }],
+    };
+
+    expect(resolveLocator('select', 'loại hình tổ chức', triggerSnapshot)).toMatchObject({
+      locator: "page.locator('#organization-type')",
+      confidence: 'high',
+      matchedBy: 'verified_dropdown_trigger',
+    });
+    expect(resolveLocator('option', 'Tổ chức tôn giáo', optionSnapshot)).toMatchObject({
+      locator: "page.getByRole('option', { name: 'Tổ chức tôn giáo', exact: true })",
+      confidence: 'high',
+      matchedBy: 'verified_option',
+    });
+  });
+
+  it('does not accept an ambiguous duplicate placeholder as verified evidence', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/form',
+      afterStep: 'duplicate fields',
+      elements: [1, 2].map(index => ({
+        tag: 'input',
+        placeholder: 'Nhập tên',
+        selector: `#name-${index}`,
+        isVisible: true,
+      })),
+    };
+
+    expect(resolveLocator('fill', 'Nhập tên', snapshot).confidence).toBe('low');
+  });
 });
