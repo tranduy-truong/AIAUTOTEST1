@@ -124,4 +124,61 @@ describe('resolveLocator', () => {
 
     expect(resolveLocator('fill', 'Nhập tên', snapshot).confidence).toBe('low');
   });
+
+  it('prefers a drawer dropdown over a same-named page filter', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'drawer opened',
+      elements: [
+        {
+          tag: 'button',
+          role: 'combobox',
+          labelText: 'Loại hình tổ chức',
+          selector: '#page-filter',
+          isVisible: true,
+        },
+        {
+          tag: 'button',
+          role: 'combobox',
+          labelText: 'Loại hình tổ chức',
+          scopeSelector: '#organization-drawer',
+          selector: '#drawer-organization-type',
+          isVisible: true,
+        },
+      ],
+    };
+
+    expect(resolveLocator('select', 'loại hình tổ chức', snapshot)).toMatchObject({
+      locator: "page.locator('#drawer-organization-type')",
+      confidence: 'high',
+      matchedBy: 'verified_dropdown_trigger',
+    });
+  });
+
+  it('resolves a Base UI option captured through data-slot metadata', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'select popup opened',
+      elements: [{
+        tag: 'div',
+        dataSlot: 'select-item',
+        dataValue: 'Tổ chức tôn giáo',
+        text: 'Tổ chức tôn giáo',
+        selector: '[data-slot="select-item"][data-value="Tổ chức tôn giáo"]',
+        isVisible: true,
+      }, {
+        tag: 'span',
+        dataSlot: 'select-item-text',
+        text: 'Tổ chức tôn giáo',
+        selector: '#nested-option-text',
+        isVisible: true,
+      }],
+    };
+
+    expect(resolveLocator('option', 'Tổ chức tôn giáo', snapshot)).toMatchObject({
+      locator: "page.locator('[data-slot=\"select-item\"][data-value=\"Tổ chức tôn giáo\"]')",
+      confidence: 'high',
+      matchedBy: 'verified_option_selector',
+    });
+  });
 });

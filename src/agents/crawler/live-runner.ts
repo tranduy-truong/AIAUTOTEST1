@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { chromium, Browser, Locator, Page } from 'playwright';
 import { ParsedStep, ParsedTestCase } from '../../core/step-parser.js';
 import {
@@ -13,7 +15,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
   (() => {
     const query = [
       'input', 'textarea', 'select', 'option', 'button', 'a[href]', 'label', 'svg', 'i',
-      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[title]',
+      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[data-slot]', '[data-value]', '[title]',
       '[onclick]', '[tabindex]',
     ].join(', ');
     const nodes = Array.from(document.querySelectorAll(query));
@@ -28,10 +30,20 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
     }
 
     function uniqueSelector(source) {
-      const interactive = source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
+      const isDirectTarget = source.matches('input, textarea, select, option, button, a[href], label, [role], [contenteditable], [data-testid], [data-slot], [data-value], [aria-label], [tabindex]');
+      const interactive = isDirectTarget
+        ? source
+        : source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
       const testId = interactive.getAttribute('data-testid');
       if (testId) return '[data-testid="' + escapeCss(testId) + '"]';
       if (interactive.id) return '#' + escapeCss(interactive.id);
+
+      const dataSlot = interactive.getAttribute('data-slot');
+      const dataValue = interactive.getAttribute('data-value');
+      if (dataSlot && dataValue) {
+        const selector = '[data-slot="' + dataSlot.replace(/"/g, '\\"') + '"][data-value="' + dataValue.replace(/"/g, '\\"') + '"]';
+        if (document.querySelectorAll(selector).length === 1) return selector;
+      }
 
       const ariaLabel = interactive.getAttribute('aria-label');
       if (ariaLabel) {
@@ -109,6 +121,8 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         ariaLabel: node.getAttribute('aria-label') || (interactive && interactive.getAttribute('aria-label')) || undefined,
         text: (node.textContent || '').trim().substring(0, 100),
         testId: node.getAttribute('data-testid') || (interactive && interactive.getAttribute('data-testid')) || undefined,
+        dataSlot: node.getAttribute('data-slot') || (interactive && interactive.getAttribute('data-slot')) || undefined,
+        dataValue: node.getAttribute('data-value') || (interactive && interactive.getAttribute('data-value')) || undefined,
         id: node.id || (interactive && interactive.id) || undefined,
         name: node.name || undefined,
         className: (node.getAttribute('class') || (interactive && interactive.getAttribute('class')) || '').substring(0, 120) || undefined,
@@ -187,6 +201,8 @@ export function buildCompactDomReport(
           element.ariaLabel,
           element.text,
           element.testId,
+          element.dataSlot,
+          element.dataValue,
           element.id,
           element.name,
           element.nearbyInputPlaceholder,
@@ -286,6 +302,136 @@ async function uniqueLocator(page: Page, step: ParsedStep, snapshot: DomSnapshot
   return uniqueLocatorFor(page, step.type, step.target || '', snapshot);
 }
 
+async function locatorIsUniqueAndVisible(locator: Locator): Promise<boolean> {
+  try {
+    return await locator.count() === 1 && await locator.isVisible();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for a state-specific control instead of assuming that network-idle means
+ * a React drawer, dialog, or portal has finished rendering. The returned
+ * snapshot is real DOM evidence and is never used as a guessed locator.
+ */
+async function waitForVerifiedTarget(
+  page: Page,
+  stepType: ParsedStep['type'] | 'option',
+  target: string,
+  afterStep: string,
+  timeout = 8000,
+): Promise<DomSnapshot> {
+  const deadline = Date.now() + timeout;
+  let latestSnapshot = await captureSnapshot(page, afterStep);
+
+  while (Date.now() <= deadline) {
+    const resolution = resolveLocator(stepType, target, latestSnapshot);
+    if (resolution.confidence !== 'low') {
+      const candidates = locatorCandidates(page, resolution, target);
+      for (const candidate of candidates) {
+        if (await locatorIsUniqueAndVisible(candidate)) return latestSnapshot;
+      }
+    }
+
+    await page.waitForTimeout(200);
+    latestSnapshot = await captureSnapshot(page, afterStep);
+  }
+
+  const resolution = resolveLocator(stepType, target, latestSnapshot);
+  throw new Error(
+    `Trang thai moi khong hien thi locator duy nhat cho "${target}" (${resolution.matchedBy})`,
+  );
+}
+
+export function nextStateStep(
+  steps: ParsedStep[],
+  currentIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  for (let index = currentIndex + 1; index < steps.length; index++) {
+    const step = steps[index];
+    if (step.type === 'goto' || step.type === 'check' || step.type === 'wait') return undefined;
+    if (step.target) return { step, stepNumber: index + 1 };
+  }
+  return undefined;
+}
+
+function normalizeActionText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+export function isLoginUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname;
+    return /(?:^|\/)(?:dang-nhap|login|sign-in)(?:\/|$)/i.test(pathname);
+  } catch {
+    return /(?:dang-nhap|login|sign-in)/i.test(value);
+  }
+}
+
+export function protectedGotoAfterLogin(
+  steps: ParsedStep[],
+  currentIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  const current = steps[currentIndex];
+  const target = normalizeActionText(current?.target || '');
+  if (!['dang nhap', 'login', 'sign in'].includes(target)) return undefined;
+
+  let nextIndex = currentIndex + 1;
+  while (
+    nextIndex < steps.length &&
+    (steps[nextIndex].type === 'wait' || steps[nextIndex].type === 'check')
+  ) {
+    nextIndex++;
+  }
+
+  const next = steps[nextIndex];
+  if (next?.type !== 'goto' || !next.url || isLoginUrl(next.url)) return undefined;
+  return { step: next, stepNumber: nextIndex + 1 };
+}
+
+export function loginStepBeforeProtectedGoto(
+  steps: ParsedStep[],
+  gotoIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  let loginIndex = gotoIndex - 1;
+  while (
+    loginIndex >= 0 &&
+    (steps[loginIndex].type === 'wait' || steps[loginIndex].type === 'check')
+  ) {
+    loginIndex--;
+  }
+  if (loginIndex < 0) return undefined;
+
+  const protectedGoto = protectedGotoAfterLogin(steps, loginIndex);
+  if (protectedGoto?.stepNumber !== gotoIndex + 1) return undefined;
+  return { step: steps[loginIndex], stepNumber: loginIndex + 1 };
+}
+
+async function waitForAuthenticationTransition(
+  page: Page,
+  loginControl: Locator,
+  timeout = 15000,
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() <= deadline) {
+    if (!isLoginUrl(page.url())) return;
+    if (!await loginControl.isVisible().catch(() => false)) return;
+    await page.waitForTimeout(200);
+  }
+
+  throw new Error(
+    'AUTHENTICATION_FAILED: URL van o trang dang nhap va form dang nhap van hien thi',
+  );
+}
+
 async function waitForStateSettled(page: Page): Promise<void> {
   try {
     await page.waitForLoadState('networkidle', { timeout: 8000 });
@@ -296,26 +442,55 @@ async function waitForStateSettled(page: Page): Promise<void> {
   await waitForInteractiveDom(page);
 }
 
-function isPotentiallyDestructive(target: string): boolean {
+export function isPotentiallyDestructive(target: string): boolean {
   return /(xóa|xoá|delete|remove|thanh toán|payment|đặt hàng|place order|lưu|save|gửi|send)/iu.test(target);
+}
+
+export interface CrawlerFailure {
+  testCaseId: string;
+  stepNumber: number;
+  step: string;
+  currentUrl: string;
+  reason: string;
+}
+
+export function crawlerRunsHeadless(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return String(env.E2E_CRAWLER_HEADLESS ?? 'true').toLowerCase() !== 'false';
+}
+
+function writeCrawlerFailures(failures: CrawlerFailure[]): void {
+  const artifactsDir = path.join(process.cwd(), 'artifacts');
+  if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(artifactsDir, 'crawler-failures.json'),
+    JSON.stringify(failures, null, 2) + '\n',
+    'utf-8',
+  );
 }
 
 export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, DomSnapshot[]>> {
   const snapshotsMap = new Map<string, DomSnapshot[]>();
+  const failures: CrawlerFailure[] = [];
   let browser: Browser | null = null;
 
   try {
-    browser = await chromium.launch({ headless: true });
+    const headless = crawlerRunsHeadless();
+    console.log(`[Live Runner] Che do trinh duyet: ${headless ? 'headless' : 'headed'}`);
+    browser = await chromium.launch({ headless });
 
     for (const testCase of testCases) {
       console.log(`[Live Runner] Dang thu thap DOM cho ${testCase.id}...`);
       const snapshots: DomSnapshot[] = [];
+      let abortRemainingSteps = false;
       // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
       const context = await browser.newContext();
       const page = await context.newPage();
 
       try {
         for (let index = 0; index < testCase.steps.length; index++) {
+          if (abortRemainingSteps) break;
           const step = testCase.steps[index];
           const stepNumber = index + 1;
 
@@ -323,7 +498,17 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
             if (step.type === 'goto') {
               if (!step.url) throw new Error('Buoc goto khong co URL');
               await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
-              await waitForInteractiveDom(page);
+              await waitForStateSettled(page);
+
+              const declaredAuthProbe = index > 0
+                ? loginStepBeforeProtectedGoto(testCase.steps, index)
+                : undefined;
+              if (declaredAuthProbe && isLoginUrl(page.url())) {
+                throw new Error(
+                  `AUTHENTICATION_FAILED: website chuyen ve trang dang nhap khi mo ${step.url}`,
+                );
+              }
+
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
               continue;
             }
@@ -337,12 +522,33 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               await locator.fill(step.value || '', { timeout: 10000 });
             } else if (step.type === 'click') {
               if (isPotentiallyDestructive(step.target || '')) {
-                console.warn(`[Live Runner]   SKIP step ${stepNumber}: hanh dong co the thay doi du lieu`);
+                // Resolve the locator from the current DOM but never execute the
+                // destructive action. ActionPlan can therefore generate the
+                // verified click without the Crawler mutating production data.
+                await uniqueLocator(page, step, beforeAction);
+                console.warn(`[Live Runner]   VERIFY-ONLY step ${stepNumber}: khong thuc thi hanh dong thay doi du lieu`);
                 continue;
               }
+              const declaredAuthProbe = protectedGotoAfterLogin(testCase.steps, index);
               const locator = await uniqueLocator(page, step, beforeAction);
               await locator.click({ timeout: 10000 });
+              if (declaredAuthProbe) {
+                console.log(`[Live Runner]   Dang cho website xac nhan dang nhap tai step ${stepNumber}...`);
+                await waitForAuthenticationTransition(page, locator);
+                console.log(`[Live Runner]   Da xac nhan trang dang nhap ket thuc tai step ${stepNumber}.`);
+              }
               await waitForStateSettled(page);
+
+              const expectedState = nextStateStep(testCase.steps, index);
+              if (expectedState) {
+                const readySnapshot = await waitForVerifiedTarget(
+                  page,
+                  expectedState.step.type,
+                  expectedState.step.target || '',
+                  `ready for step ${expectedState.stepNumber}: ${expectedState.step.raw}`,
+                );
+                snapshots.push(readySnapshot);
+              }
             } else if (step.type === 'select') {
               const locator = await uniqueLocator(page, step, beforeAction);
               if (await locator.evaluate(element => element.tagName.toLowerCase() === 'select')) {
@@ -350,8 +556,10 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               } else {
                 await locator.click({ timeout: 10000 });
                 await waitForStateSettled(page);
-                const optionSnapshot = await captureSnapshot(
+                const optionSnapshot = await waitForVerifiedTarget(
                   page,
+                  'option',
+                  step.value || '',
                   `during step ${stepNumber}: options for ${step.raw}`,
                 );
                 snapshots.push(optionSnapshot);
@@ -372,7 +580,19 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
             }
           } catch (error) {
-            console.warn(`[Live Runner]   WARNING step ${stepNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            const reason = error instanceof Error ? error.message : 'Unknown error';
+            failures.push({
+              testCaseId: testCase.id,
+              stepNumber,
+              step: step.raw,
+              currentUrl: page.url(),
+              reason,
+            });
+            console.warn(`[Live Runner]   WARNING step ${stepNumber}: ${reason} (URL: ${page.url()})`);
+            if (reason.startsWith('AUTHENTICATION_FAILED:')) {
+              abortRemainingSteps = true;
+              console.warn('[Live Runner]   STOP test case: cac buoc sau can phien dang nhap hop le');
+            }
           }
         }
       } finally {
@@ -382,6 +602,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
     }
   } finally {
     if (browser) await browser.close();
+    writeCrawlerFailures(failures);
   }
 
   return snapshotsMap;

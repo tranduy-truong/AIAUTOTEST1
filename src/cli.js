@@ -158,15 +158,29 @@ Vi du:
 
       fs.writeFileSync("artifacts/crawled-dom.md", domReport);
       const actionPlan = buildActionPlan(parsedCases, snapshotsMap);
+      const crawlerFailuresPath = "artifacts/crawler-failures.json";
+      const crawlerFailures = fs.existsSync(crawlerFailuresPath)
+        ? JSON.parse(fs.readFileSync(crawlerFailuresPath, "utf-8"))
+        : [];
       const unresolvedActions = actionPlan.testCases.flatMap(testCase =>
         testCase.actions
           .filter(action => action.confidence === "low")
-          .map(action => ({
-            testCaseId: testCase.id,
-            stepIndex: action.stepIndex,
-            description: action.description,
-            matchedBy: action.matchedBy,
-          })),
+          .map(action => {
+            const crawlerFailure = crawlerFailures.find(failure =>
+              failure.testCaseId === testCase.id && failure.stepNumber === action.stepIndex,
+            ) || crawlerFailures.find(failure =>
+              failure.testCaseId === testCase.id &&
+              String(failure.reason).startsWith("AUTHENTICATION_FAILED:"),
+            );
+            return {
+              testCaseId: testCase.id,
+              stepIndex: action.stepIndex,
+              description: action.description,
+              matchedBy: action.matchedBy,
+              currentUrl: crawlerFailure?.currentUrl,
+              crawlerReason: crawlerFailure?.reason,
+            };
+          }),
       );
       if (unresolvedActions.length > 0) {
         fs.writeFileSync(
@@ -175,7 +189,9 @@ Vi du:
         );
         throw new Error(
           `Crawler chua xac minh duoc ${unresolvedActions.length} action. ` +
-          `Chi tiet: artifacts/unresolved-actions.json. Generator da duoc chan de khong doan locator.`,
+          `Lan chay nay da ket thuc, khong tu dong cho hay thu lai. ` +
+          `Chi tiet: artifacts/unresolved-actions.json va artifacts/crawler-failures.json. ` +
+          `Generator duoc chan de khong doan locator.`,
         );
       }
       console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
