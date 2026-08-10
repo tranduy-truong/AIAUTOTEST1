@@ -248,6 +248,62 @@ describe('buildActionPlan', () => {
     expect(select.playwrightCode).not.toContain('.first()');
   });
 
+  it('compiles a dropdown option learned from a user click', () => {
+    const testCase: ParsedTestCase = {
+      id: 'TC_01',
+      name: 'Chọn tôn giáo',
+      url: 'https://example.com/to-chuc',
+      unparsedSteps: [],
+      steps: [
+        { type: 'goto', url: 'https://example.com/to-chuc', raw: '- Mở URL' },
+        {
+          type: 'select',
+          target: 'tôn giáo',
+          value: 'Công giáo',
+          raw: "- Dropdown chọn tôn giáo, chọn 'Công giáo'",
+        },
+      ],
+    };
+    const triggerSnapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'before step 2: religion dropdown',
+      elements: [{
+        tag: 'button',
+        role: 'combobox',
+        labelText: 'Tôn giáo',
+        selector: '#religion-trigger',
+        isVisible: true,
+      }],
+    };
+    const learnedOptionSnapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'during step 2: guided options',
+      elements: [{
+        tag: 'div',
+        selector: '[data-value="catholic"]',
+        learnedStepType: 'option',
+        learnedTarget: 'Công giáo',
+        learnedLocator: "page.locator('[data-value=\"catholic\"]')",
+        isVisible: true,
+      }],
+    };
+
+    const plan = buildActionPlan(
+      [testCase],
+      new Map([['TC_01', [triggerSnapshot, learnedOptionSnapshot]]]),
+      { persist: false },
+    );
+    const select = plan.testCases[0].actions[1];
+
+    expect(select).toMatchObject({
+      confidence: 'high',
+      matchedBy: 'verified_dropdown_trigger+guided_learning',
+    });
+    expect(select.playwrightCode).toContain(
+      "page.locator('[data-value=\"catholic\"]')",
+    );
+  });
+
   it('adds an observed URL postcondition after a navigation click', () => {
     const testCase: ParsedTestCase = {
       id: 'TC_01',
@@ -285,5 +341,41 @@ describe('buildActionPlan', () => {
     expect(plan.testCases[0].actions[1].playwrightCode).toContain(
       "await page.waitForURL('https://example.com/dashboard'",
     );
+  });
+
+  it('generates a destructive click when its locator was verified without executing it', () => {
+    const testCase: ParsedTestCase = {
+      id: 'TC_01',
+      name: 'Lưu tổ chức',
+      url: 'https://example.com/to-chuc',
+      unparsedSteps: [],
+      steps: [
+        { type: 'goto', url: 'https://example.com/to-chuc', raw: '- Mở URL' },
+        { type: 'click', target: 'Lưu', raw: "- Nhấn nút 'Lưu'" },
+      ],
+    };
+    const beforeSave: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'before step 2: save organization',
+      elements: [{
+        tag: 'button',
+        text: 'Lưu',
+        accessibleName: 'Lưu',
+        selector: '#save-organization',
+        isVisible: true,
+      }],
+    };
+
+    const plan = buildActionPlan(
+      [testCase],
+      new Map([['TC_01', [beforeSave]]]),
+      { persist: false },
+    );
+
+    expect(plan.testCases[0].actions[1]).toMatchObject({
+      confidence: 'high',
+      matchedBy: 'role+name',
+      playwrightCode: "await page.getByRole('button', { name: 'Lưu', exact: true }).click();",
+    });
   });
 });
