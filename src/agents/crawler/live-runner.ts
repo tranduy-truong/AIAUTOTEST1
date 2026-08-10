@@ -15,7 +15,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
   (() => {
     const query = [
       'input', 'textarea', 'select', 'option', 'button', 'a[href]', 'label', 'svg', 'i',
-      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[title]',
+      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[data-slot]', '[data-value]', '[title]',
       '[onclick]', '[tabindex]',
     ].join(', ');
     const nodes = Array.from(document.querySelectorAll(query));
@@ -30,10 +30,20 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
     }
 
     function uniqueSelector(source) {
-      const interactive = source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
+      const isDirectTarget = source.matches('input, textarea, select, option, button, a[href], label, [role], [contenteditable], [data-testid], [data-slot], [data-value], [aria-label], [tabindex]');
+      const interactive = isDirectTarget
+        ? source
+        : source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
       const testId = interactive.getAttribute('data-testid');
       if (testId) return '[data-testid="' + escapeCss(testId) + '"]';
       if (interactive.id) return '#' + escapeCss(interactive.id);
+
+      const dataSlot = interactive.getAttribute('data-slot');
+      const dataValue = interactive.getAttribute('data-value');
+      if (dataSlot && dataValue) {
+        const selector = '[data-slot="' + dataSlot.replace(/"/g, '\\"') + '"][data-value="' + dataValue.replace(/"/g, '\\"') + '"]';
+        if (document.querySelectorAll(selector).length === 1) return selector;
+      }
 
       const ariaLabel = interactive.getAttribute('aria-label');
       if (ariaLabel) {
@@ -111,6 +121,8 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         ariaLabel: node.getAttribute('aria-label') || (interactive && interactive.getAttribute('aria-label')) || undefined,
         text: (node.textContent || '').trim().substring(0, 100),
         testId: node.getAttribute('data-testid') || (interactive && interactive.getAttribute('data-testid')) || undefined,
+        dataSlot: node.getAttribute('data-slot') || (interactive && interactive.getAttribute('data-slot')) || undefined,
+        dataValue: node.getAttribute('data-value') || (interactive && interactive.getAttribute('data-value')) || undefined,
         id: node.id || (interactive && interactive.id) || undefined,
         name: node.name || undefined,
         className: (node.getAttribute('class') || (interactive && interactive.getAttribute('class')) || '').substring(0, 120) || undefined,
@@ -189,6 +201,8 @@ export function buildCompactDomReport(
           element.ariaLabel,
           element.text,
           element.testId,
+          element.dataSlot,
+          element.dataValue,
           element.id,
           element.name,
           element.nearbyInputPlaceholder,
