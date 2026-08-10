@@ -7,7 +7,7 @@ import { TestPolicyHarness } from "./harness/policy.js";
 import { runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
 import { runHealer } from "./agents/healer/run.js";
-import { parseScript } from "./core/step-parser.js";
+import { parseScript, validateParsedScript } from "./core/step-parser.js";
 import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 
@@ -134,12 +134,18 @@ Vi du:
         throw new Error("Khong tim thay test case nao trong kich ban");
       }
 
-      const unparsedSteps = parsedCases.flatMap(testCase =>
-        testCase.unparsedSteps.map(step => `${testCase.id}: ${step}`),
-      );
-      if (unparsedSteps.length > 0) {
-        console.warn(`   Parser can xem lai ${unparsedSteps.length} buoc; Planner van nhan kich ban goc.`);
-        unparsedSteps.forEach(step => console.warn(`   - ${step}`));
+      const parserIssues = validateParsedScript(parsedCases);
+      if (parserIssues.length > 0) {
+        if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+        fs.writeFileSync(
+          "artifacts/parser-errors.json",
+          JSON.stringify(parserIssues, null, 2) + "\n",
+        );
+        throw new Error(
+          `Parser chua hieu ${parserIssues.length} buoc: ${parserIssues
+            .map(issue => `${issue.testCaseId}: ${issue.step}`)
+            .join(" | ")}`,
+        );
       }
 
       if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
@@ -151,10 +157,32 @@ Vi du:
       const domReport = buildCompactDomReport(snapshotsMap);
 
       fs.writeFileSync("artifacts/crawled-dom.md", domReport);
-      buildActionPlan(parsedCases, snapshotsMap);
+      const actionPlan = buildActionPlan(parsedCases, snapshotsMap);
+      const unresolvedActions = actionPlan.testCases.flatMap(testCase =>
+        testCase.actions
+          .filter(action => action.confidence === "low")
+          .map(action => ({
+            testCaseId: testCase.id,
+            stepIndex: action.stepIndex,
+            description: action.description,
+            matchedBy: action.matchedBy,
+          })),
+      );
+      if (unresolvedActions.length > 0) {
+        fs.writeFileSync(
+          "artifacts/unresolved-actions.json",
+          JSON.stringify(unresolvedActions, null, 2) + "\n",
+        );
+        throw new Error(
+          `Crawler chua xac minh duoc ${unresolvedActions.length} action. ` +
+          `Chi tiet: artifacts/unresolved-actions.json. Generator da duoc chan de khong doan locator.`,
+        );
+      }
       console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
     } catch (err) {
-      console.log(`   Warning: Live Crawler gap loi (khong anh huong kich ban): ${err.message}`);
+      console.error(`   Loi hop dong E2E: ${err.message}`);
+      console.error("   Da dung truoc Planner/Generator de tranh sinh test doan mo.");
+      return;
     }
 
     contextData = `[CHẾ ĐỘ KỊCH BẢN CHI TIẾT - SCRIPT MODE]
