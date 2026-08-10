@@ -167,8 +167,10 @@ Vi du:
           .filter(action => action.confidence === "low")
           .map(action => {
             const crawlerFailure = crawlerFailures.find(failure =>
+              failure.testCaseId === testCase.id && failure.stepNumber === action.stepIndex,
+            ) || crawlerFailures.find(failure =>
               failure.testCaseId === testCase.id &&
-              failure.stepNumber === action.stepIndex,
+              String(failure.reason).startsWith("AUTHENTICATION_FAILED:"),
             );
             return {
               testCaseId: testCase.id,
