@@ -53,6 +53,24 @@ function extractQuotedLiterals(value: string): string[] {
   return literals;
 }
 
+function extractVisibleMessageWithoutBalancedQuotes(value: string): string | undefined {
+  const candidates = [
+    value.match(/(?:có\s+)?thông\s+báo\s*:?\s*(.+?)\s+xuất\s+hiện\s*[.!?]*$/iu)?.[1],
+    value.match(/(?:hiển\s+thị|xuất\s+hiện)\s+(?:thông\s+báo|text)\s*:?\s*(.+)$/iu)?.[1],
+  ];
+
+  for (const candidate of candidates) {
+    const cleaned = (candidate || '')
+      .trim()
+      .replace(/^["'“”‘’\s]+/u, '')
+      .replace(/["'“”‘’\s]+$/u, '')
+      .trim();
+    if (cleaned) return cleaned;
+  }
+
+  return undefined;
+}
+
 /** Accept plain URLs and Markdown links pasted from rich-text editors. */
 export function extractHttpUrl(value: string): string | undefined {
   const markdownLink = value.match(/\[(https?:\/\/[^\]]+)\]\((https?:\/\/[^)]+)\)/i);
@@ -100,6 +118,10 @@ export function parseAssertions(value: string): ParsedAssertion[] {
   ].some(keyword => normalized.includes(keyword));
   if (isVisibleTextAssertion && literals.length > 0) {
     return literals.map(literal => ({ kind: 'text_visible' as const, value: literal }));
+  }
+  if (isVisibleTextAssertion) {
+    const message = extractVisibleMessageWithoutBalancedQuotes(value);
+    if (message) return [{ kind: 'text_visible', value: message }];
   }
 
   return [{ kind: 'unknown', value: value.trim() }];
