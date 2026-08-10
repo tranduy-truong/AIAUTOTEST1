@@ -20,16 +20,78 @@ export function getGeneratedTestDirectory(
   return path.join(cwd, "tests", level);
 }
 
-export function clearGeneratedE2ESpecs(outDir: string): void {
+export function cleanupLegacyGeneratedE2EOutput(outDir: string): void {
   const legacyGeneratedDir = path.join(outDir, "generated");
   fs.rmSync(legacyGeneratedDir, { recursive: true, force: true });
+}
 
-  if (!fs.existsSync(outDir)) return;
-  for (const entry of fs.readdirSync(outDir, { withFileTypes: true })) {
-    if (entry.isFile() && /\.spec\.[jt]s$/i.test(entry.name)) {
-      fs.rmSync(path.join(outDir, entry.name), { force: true });
+export function slugifyVietnameseFileName(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+export function deriveSpecBaseName(testCaseNames: string[], fallback: string): string {
+  const tokenGroups = testCaseNames
+    .map(name => slugifyVietnameseFileName(name).split('_').filter(Boolean))
+    .filter(tokens => tokens.length > 0);
+
+  if (tokenGroups.length === 1) return tokenGroups[0].join('_');
+  if (tokenGroups.length > 1) {
+    const commonPrefix: string[] = [];
+    const shortest = Math.min(...tokenGroups.map(tokens => tokens.length));
+    for (let index = 0; index < shortest; index++) {
+      const token = tokenGroups[0][index];
+      if (!tokenGroups.every(tokens => tokens[index] === token)) break;
+      commonPrefix.push(token);
     }
+    if (commonPrefix.length >= 2) return commonPrefix.join('_');
+    return `tong_hop_${tokenGroups[0].slice(0, 5).join('_')}`;
   }
+
+  return slugifyVietnameseFileName(fallback) || 'kiem_thu_e2e';
+}
+
+export function createDatedUniqueSpecPath(
+  outDir: string,
+  testCaseNames: string[],
+  fallback: string,
+  extension = '.spec.ts',
+  now = new Date(),
+): string {
+  const date = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('_');
+  const baseName = `${deriveSpecBaseName(testCaseNames, fallback)}_${date}`;
+  let candidate = path.join(outDir, `${baseName}${extension}`);
+  let version = 2;
+
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(outDir, `${baseName}_${String(version).padStart(2, '0')}${extension}`);
+    version++;
+  }
+
+  return candidate;
+}
+
+function testCaseNamesForContent(content: string, plan?: ActionPlan): string[] {
+  if (!plan) return [];
+  const ids = new Set(
+    [...content.matchAll(/\bTC(?:_[A-Z0-9]+)+\b/gi)]
+      .map(match => match[0].toUpperCase()),
+  );
+  const matched = plan.testCases
+    .filter(testCase => ids.has(testCase.id.toUpperCase()))
+    .map(testCase => testCase.name);
+  return matched.length > 0 ? matched : plan.testCases.map(testCase => testCase.name);
 }
 
 function loadVerifiedActionPlan(level: "unit" | "integration" | "e2e"): ActionPlan | undefined {
@@ -273,10 +335,10 @@ test.describe('Product', () => {
       : result.rawOutput.trim();
 
     const outDir = getGeneratedTestDirectory(level);
-    // E2E là output tạm theo từng kịch bản. Dọn suite cũ để lần chạy kế tiếp
-    // không vô tình chạy lại test của website trước đó.
+    // Chỉ dọn cấu trúc generated/ cũ. Các file spec đã sinh là lịch sử kiểm
+    // thử của tester và không được xóa hoặc ghi đè.
     if (level === "e2e") {
-      clearGeneratedE2ESpecs(outDir);
+      cleanupLegacyGeneratedE2EOutput(outDir);
     }
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     const displayOutDir = path.relative(process.cwd(), outDir).replace(/\\/g, "/");
@@ -320,7 +382,14 @@ test.describe('Product', () => {
         // ★ POST-PROCESSING: Sửa lỗi phổ biến trước khi ghi file
         fileContent = fixCommonPlaywrightIssues(fileContent, verifiedActionPlan);
 
-        const filePath = path.join(outDir, fileName);
+        const filePath = level === 'e2e'
+          ? createDatedUniqueSpecPath(
+              outDir,
+              testCaseNamesForContent(fileContent, verifiedActionPlan),
+              fileName,
+              fileExtension,
+            )
+          : path.join(outDir, fileName);
         fs.writeFileSync(filePath, fileContent + "\n");
         savedFiles.push(filePath);
         console.log(`  ✅ Đã tạo: ${filePath}`);
@@ -345,7 +414,14 @@ test.describe('Product', () => {
         "",
       );
 
-      const filePath = path.join(outDir, `${cleanTargetName}${fileExtension}`);
+      const filePath = level === 'e2e'
+        ? createDatedUniqueSpecPath(
+            outDir,
+            testCaseNamesForContent(cleanedContent, verifiedActionPlan),
+            cleanTargetName,
+            fileExtension,
+          )
+        : path.join(outDir, `${cleanTargetName}${fileExtension}`);
       fs.writeFileSync(filePath, cleanedContent + "\n");
       console.log(`✅ Đã sinh code thành công! File lưu tại: ${filePath}`);
     }
