@@ -3,12 +3,13 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  defaultLocatorRegistryPath,
   findLearnedLocator,
   loadLocatorRegistry,
   rememberLearnedLocator,
   registryPageKey,
   saveLocatorRegistry,
-} from '../../src/core/locator-registry.js';
+} from '../../src/agents/crawler/locator-registry.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -19,6 +20,12 @@ afterEach(() => {
 });
 
 describe('locator registry', () => {
+  it('stores crawler learning state in the existing hidden testkit area', () => {
+    expect(defaultLocatorRegistryPath()).toBe(
+      path.join(process.cwd(), '.testkit', 'crawler-locators.json'),
+    );
+  });
+
   it('scopes learned locators by page, action, target, and dropdown context', () => {
     const registry = { version: 1 as const, entries: [] };
     rememberLearnedLocator(registry, {
