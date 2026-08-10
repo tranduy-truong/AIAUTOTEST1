@@ -9,6 +9,8 @@ export interface ResolvedAction {
   playwrightCode: string;
   description: string;
   confidence: 'high' | 'medium' | 'low';
+  matchedBy?: string;
+  verifiedSelector?: string;
 }
 
 export interface ActionPlan {
@@ -23,77 +25,69 @@ export interface ActionPlan {
 
 export function buildActionPlan(
   parsedCases: ParsedTestCase[],
-  snapshotsMap: Map<string, DomSnapshot[]>
+  snapshotsMap: Map<string, DomSnapshot[]>,
+  options: { persist?: boolean } = {},
 ): ActionPlan {
   const plan: ActionPlan = { testCases: [] };
 
   for (const testCase of parsedCases) {
     const snapshots = snapshotsMap.get(testCase.id) || [];
-    let snapshotIndex = 0;
-    let currentSnapshot: DomSnapshot | undefined = snapshots[0];
-
     const actions: ResolvedAction[] = [];
-    let needsLogin = false;
-    let hasGotoLogin = false;
-    let fillCount = 0;
-    
-    // Đánh giá sơ bộ về việc cần đăng nhập thông qua các bước đầu
-    if (testCase.steps.length > 0) {
-        const firstStep = testCase.steps[0];
-        if (firstStep.type === 'goto' && firstStep.url?.toLowerCase().includes('login')) {
-            hasGotoLogin = true;
-        }
-    }
 
     testCase.steps.forEach((step, index) => {
       const stepIndex = index + 1;
       let playwrightCode = '';
       let confidence: 'high' | 'medium' | 'low' = 'high';
+      let matchedBy: string | undefined;
+      let verifiedSelector: string | undefined;
+      const currentSnapshot = snapshots.find(snapshot =>
+        snapshot.afterStep.startsWith(`before step ${stepIndex}:`) ||
+        snapshot.afterStep.startsWith(`after step ${stepIndex}:`),
+      ) || snapshots
+        .filter(snapshot => {
+          const match = snapshot.afterStep.match(/(?:before|after) step (\d+):/);
+          return match ? Number(match[1]) < stepIndex : false;
+        })
+        .at(-1);
       
       switch (step.type) {
         case 'goto':
-          playwrightCode = `await page.goto('${step.url}', { waitUntil: 'domcontentloaded' });`;
-          // Sau khi goto thì sử dụng snapshot tiếp theo đã chụp
-          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].afterStep.includes('goto')) {
-              currentSnapshot = snapshots[snapshotIndex];
-              snapshotIndex++;
-          }
+          playwrightCode = `await page.goto('${escapeSingleQuoted(step.url || '')}', { waitUntil: 'domcontentloaded' });`;
           break;
 
-        case 'fill':
-          fillCount++;
+        case 'fill': {
           const fillRes = resolveLocator('fill', step.target || '', currentSnapshot);
-          const safeFillVal = (step.value || '').replace(/'/g, "\\'");
+          const safeFillVal = escapeSingleQuoted(step.value || '');
           playwrightCode = `await ${fillRes.locator || 'page.locator("unknown")'}.fill('${safeFillVal}');`;
           confidence = fillRes.confidence || 'medium';
+          matchedBy = fillRes.matchedBy;
+          verifiedSelector = fillRes.element?.selector;
           break;
+        }
 
-        case 'click':
+        case 'click': {
           const clickRes = resolveLocator('click', step.target || '', currentSnapshot);
           playwrightCode = `await ${clickRes.locator || 'page.locator("unknown")'}.click();`;
           confidence = clickRes.confidence || 'medium';
-          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].afterStep.includes('click')) {
-              currentSnapshot = snapshots[snapshotIndex];
-              snapshotIndex++;
-          }
+          matchedBy = clickRes.matchedBy;
+          verifiedSelector = clickRes.element?.selector;
           break;
+        }
 
         case 'select':
           const safeSelectTarget = (step.target || '').replace(/'/g, "\\'");
           const safeSelectValue = (step.value || '').replace(/'/g, "\\'");
           playwrightCode = `await page.getByText('${safeSelectTarget}').or(page.getByRole('combobox', { name: '${safeSelectTarget}' })).first().click();\nawait page.getByRole('option', { name: '${safeSelectValue}' }).first().click();`;
           confidence = 'medium';
-          if (snapshotIndex < snapshots.length && snapshots[snapshotIndex].afterStep.includes('select')) {
-              currentSnapshot = snapshots[snapshotIndex];
-              snapshotIndex++;
-          }
           break;
 
-        case 'check':
+        case 'check': {
           const checkRes = resolveLocator('check', step.assertion || '', currentSnapshot);
           playwrightCode = checkRes.locator || '/* assertion error */';
           confidence = checkRes.confidence || 'medium';
+          matchedBy = checkRes.matchedBy;
           break;
+        }
 
         case 'wait':
           playwrightCode = `await page.waitForLoadState('domcontentloaded');`;
@@ -105,14 +99,16 @@ export function buildActionPlan(
         type: step.type,
         playwrightCode,
         description: step.raw || step.target || '',
-        confidence
+        confidence,
+        matchedBy,
+        verifiedSelector,
       });
     });
 
     // Quyết định needsLogin: Chỉ cần khi TC đến trang quản trị (không phải trang login)
     const tcUrl = testCase.steps.find(s => s.type === 'goto')?.url || testCase.url || '';
     const isLoginUrl = !tcUrl || /dang-nhap|login/i.test(tcUrl);
-    needsLogin = !isLoginUrl;
+    const needsLogin = !isLoginUrl;
 
     plan.testCases.push({
       id: testCase.id,
@@ -123,14 +119,23 @@ export function buildActionPlan(
     });
   }
 
-  // Lưu file action-plan.json
-  const artifactsDir = path.join(process.cwd(), 'artifacts');
-  if (!fs.existsSync(artifactsDir)) {
-      fs.mkdirSync(artifactsDir, { recursive: true });
+  if (options.persist !== false) {
+    const artifactsDir = path.join(process.cwd(), 'artifacts');
+    if (!fs.existsSync(artifactsDir)) {
+        fs.mkdirSync(artifactsDir, { recursive: true });
+    }
+    fs.writeFileSync(path.join(artifactsDir, 'action-plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
   }
-  fs.writeFileSync(path.join(artifactsDir, 'action-plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
 
   return plan;
+}
+
+function escapeSingleQuoted(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
 }
 
 /**
@@ -143,7 +148,7 @@ export function generateSpecFromActionPlan(plan: ActionPlan): string {
   lines.push("");
 
   // Lấy BASE_URL từ test case đầu tiên
-  const firstUrl = plan.testCases[0]?.baseUrl || "https://hcm.mobifone.vn/qly-dttg/dang-nhap";
+  const firstUrl = plan.testCases[0]?.baseUrl || "about:blank";
   lines.push(`const BASE_URL = '${firstUrl}';`);
   lines.push("");
 

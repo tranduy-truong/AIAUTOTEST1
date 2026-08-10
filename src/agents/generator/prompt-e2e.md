@@ -31,7 +31,7 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
 5. **GIỮ NGUYÊN DỮ LIỆU CỦA TỪNG KỊCH BẢN**:
    - URL, username, password và mọi giá trị nhập PHẢI lấy chính xác từ KỊCH BẢN GỐC của lần chạy hiện tại.
    - Ghi các giá trị này trực tiếp vào file `.spec.ts` sinh tự động; KHÔNG thay bằng `process.env`, placeholder hoặc dữ liệu tự đoán.
-   - File E2E sinh tự động nằm trong `tests/e2e/generated/` và không được commit lên Git.
+   - File E2E sinh tự động nằm trực tiếp trong `tests/e2e/` và không được commit lên Git.
    - CẤM đưa password vào tên test, comment hoặc `console.log`; password chỉ xuất hiện tại bước nhập/assertion mà kịch bản yêu cầu.
    - Chuỗi phải được escape thành TypeScript hợp lệ nếu dữ liệu có dấu nháy, dấu gạch chéo hoặc ký tự đặc biệt.
 6. **MÃ NGUỒN HOÀN CHỈNH**:

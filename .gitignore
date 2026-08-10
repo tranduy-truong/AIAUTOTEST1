@@ -8,7 +8,8 @@ node_modules/
 /playwright/.auth/
 .env
 /.testkit/
-/tests/e2e/generated/
+/tests/e2e/*.spec.ts
+/tests/e2e/*.spec.js
 /artifacts/crawled-dom.md
 /artifacts/source-script-e2e.md
 /artifacts/test-plan-*.json

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { OpenAIAdapter } from "../../adapters/openai.js";
+import type { ActionPlan, ResolvedAction } from "../../core/action-plan.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const MAX_DOM_REPORT_CHARS = 8000;
@@ -15,9 +16,46 @@ export function getGeneratedTestDirectory(
   level: "unit" | "integration" | "e2e",
   cwd = process.cwd(),
 ): string {
-  return level === "e2e"
-    ? path.join(cwd, "tests", "e2e", "generated")
-    : path.join(cwd, "tests", level);
+  return path.join(cwd, "tests", level);
+}
+
+export function clearGeneratedE2ESpecs(outDir: string): void {
+  const legacyGeneratedDir = path.join(outDir, "generated");
+  fs.rmSync(legacyGeneratedDir, { recursive: true, force: true });
+
+  if (!fs.existsSync(outDir)) return;
+  for (const entry of fs.readdirSync(outDir, { withFileTypes: true })) {
+    if (entry.isFile() && /\.spec\.[jt]s$/i.test(entry.name)) {
+      fs.rmSync(path.join(outDir, entry.name), { force: true });
+    }
+  }
+}
+
+function loadVerifiedActionPlan(level: "unit" | "integration" | "e2e"): ActionPlan | undefined {
+  if (level !== "e2e" || !fs.existsSync("artifacts/action-plan.json")) return undefined;
+
+  try {
+    return JSON.parse(fs.readFileSync("artifacts/action-plan.json", "utf-8")) as ActionPlan;
+  } catch (error) {
+    console.warn(`   Không đọc được Action Plan đã xác minh: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    return undefined;
+  }
+}
+
+function compactActionPlan(plan: ActionPlan): string {
+  return JSON.stringify({
+    testCases: plan.testCases.map(testCase => ({
+      id: testCase.id,
+      actions: testCase.actions.map(action => ({
+        stepIndex: action.stepIndex,
+        type: action.type,
+        description: action.description,
+        playwrightCode: action.playwrightCode,
+        confidence: action.confidence,
+        matchedBy: action.matchedBy,
+      })),
+    })),
+  }, null, 2);
 }
 
 export async function runGenerator(
@@ -45,6 +83,7 @@ export async function runGenerator(
   if (level === 'e2e' && fs.existsSync('artifacts/source-script-e2e.md')) {
     sourceScript = fs.readFileSync('artifacts/source-script-e2e.md', 'utf-8');
   }
+  const verifiedActionPlan = loadVerifiedActionPlan(level);
 
   // 2. Cấu hình Framework đích (Playwright hay Vitest)
   let framework = "";
@@ -73,7 +112,7 @@ export async function runGenerator(
 
   // Đọc DOM data nếu có từ crawler
   let crawledDomData = "";
-  if (fs.existsSync("artifacts/crawled-dom.md")) {
+  if (!verifiedActionPlan && fs.existsSync("artifacts/crawled-dom.md")) {
     const domReport = limitDomReport(fs.readFileSync("artifacts/crawled-dom.md", "utf-8"));
     crawledDomData =
       `\n\n[BÁO CÁO CRAWLED DOM THỰC TẾ - BẮT BUỘC DÙNG CHÍNH XÁC CÁC LOCATOR NÀY]:\n` +
@@ -89,11 +128,13 @@ Bạn là chuyên gia tự động hóa kiểm thử. Dựa vào bản Test Plan
 ${testPlan}
 ${crawledDomData}
 
+${verifiedActionPlan ? `[ACTION PLAN ĐÃ ĐƯỢC CRAWLER XÁC MINH - PLAYWRIGHT CODE TRONG TỪNG ACTION LÀ BẮT BUỘC]:\n${compactActionPlan(verifiedActionPlan)}` : ''}
+
 ${sourceScript ? `[KỊCH BẢN GỐC - NGUỒN SỰ THẬT CHO THỨ TỰ BƯỚC, TEST DATA VÀ ASSERTION]:\n${sourceScript}` : ''}
 
 [QUY TẮC QUAN TRỌNG - PHẢI TUÂN THỦ TUYỆT ĐỐI]:
 1. Kịch bản gốc quyết định chính xác thứ tự bước, dữ liệu nhập và assertion; Test Plan chỉ bổ sung ý nghĩa nghiệp vụ.
-2. Locator chỉ được lấy từ role/name/placeholder/label hoặc cột Verified selector có trong báo cáo DOM.
+2. Nếu có ACTION PLAN ĐÃ ĐƯỢC CRAWLER XÁC MINH, PHẢI chép đúng playwrightCode cho từng action; CẤM thay bằng locator khác.
 3. TUYỆT ĐỐI KHÔNG tự đoán class theo thư viện UI như .lucide-eye, .fa-edit hoặc [class*=eye] nếu DOM không cung cấp class đó.
 4. Nếu không có locator duy nhất được xác minh, đánh dấu test bằng test.fixme(true, 'Không có locator được xác minh cho ...') thay vì sinh locator đoán mò.
 5. Nhóm các test case theo MODULE thành các file riêng biệt.
@@ -153,7 +194,7 @@ test.describe('Product', () => {
     // E2E là output tạm theo từng kịch bản. Dọn suite cũ để lần chạy kế tiếp
     // không vô tình chạy lại test của website trước đó.
     if (level === "e2e") {
-      fs.rmSync(outDir, { recursive: true, force: true });
+      clearGeneratedE2ESpecs(outDir);
     }
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     const displayOutDir = path.relative(process.cwd(), outDir).replace(/\\/g, "/");
@@ -195,7 +236,7 @@ test.describe('Product', () => {
         fileContent = fileContent.replace(/^\/\/ FILE:.*\n?/, "").trim();
 
         // ★ POST-PROCESSING: Sửa lỗi phổ biến trước khi ghi file
-        fileContent = fixCommonPlaywrightIssues(fileContent);
+        fileContent = fixCommonPlaywrightIssues(fileContent, verifiedActionPlan);
 
         const filePath = path.join(outDir, fileName);
         fs.writeFileSync(filePath, fileContent + "\n");
@@ -212,7 +253,7 @@ test.describe('Product', () => {
       let cleanedContent = codeContent.replace(/^\/\/ FILE:.*\n?/gm, "").trim();
 
       // ★ POST-PROCESSING: Sửa lỗi phổ biến trước khi ghi file
-      cleanedContent = fixCommonPlaywrightIssues(cleanedContent);
+      cleanedContent = fixCommonPlaywrightIssues(cleanedContent, verifiedActionPlan);
 
       let cleanTargetName = targetFileName
         .replace(/[<>:"/\\|?*`']/g, "")
@@ -294,7 +335,82 @@ function fixPasswordToggleAssertions(code: string): { code: string; changed: boo
   return { code: lines.join('\n'), changed };
 }
 
-export function fixCommonPlaywrightIssues(code: string): string {
+function normalizeForMatching(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd');
+}
+
+function isPasswordToggleAction(action: ResolvedAction): boolean {
+  if (action.type !== 'click' || action.confidence === 'low') return false;
+  const description = normalizeForMatching(action.description);
+  return description.includes('con mat') || description.includes('eye') || description.includes('an/hien mat khau');
+}
+
+function fixPasswordToggleLocators(
+  code: string,
+  actionPlan?: ActionPlan,
+): { code: string; changed: boolean } {
+  if (!actionPlan) return { code, changed: false };
+
+  const lines = code.split('\n');
+  const testStarts = lines
+    .map((line, index) => (/^\s*test\s*\(/.test(line) ? index : -1))
+    .filter(index => index >= 0);
+  let changed = false;
+
+  for (let position = 0; position < testStarts.length; position++) {
+    const start = testStarts[position];
+    const end = testStarts[position + 1] ?? lines.length;
+    const id = lines[start].match(/\bTC_\d+\b/i)?.[0].toUpperCase();
+    if (!id) continue;
+
+    const testCase = actionPlan.testCases.find(candidate => candidate.id.toUpperCase() === id);
+    if (!testCase) continue;
+    const verifiedToggleClicks = testCase.actions.filter(isPasswordToggleAction);
+    if (verifiedToggleClicks.length === 0) continue;
+
+    const guessedToggleLines: number[] = [];
+    const allClickLines: number[] = [];
+    for (let index = start + 1; index < end; index++) {
+      if (!/\.click\(/.test(lines[index])) continue;
+      allClickLines.push(index);
+      const normalizedLine = normalizeForMatching(lines[index]);
+      if (
+        (normalizedLine.includes('con mat') || normalizedLine.includes('eye')) &&
+        /(getByRole|getByText|getByLabel)/.test(lines[index])
+      ) {
+        guessedToggleLines.push(index);
+      }
+    }
+
+    guessedToggleLines.forEach((lineIndex, clickIndex) => {
+      const verifiedAction = verifiedToggleClicks[clickIndex];
+      if (!verifiedAction) return;
+      const indent = lines[lineIndex].match(/^\s*/)?.[0] || '';
+      lines[lineIndex] = `${indent}${verifiedAction.playwrightCode.trim()}`;
+      changed = true;
+    });
+
+    const plannedClickCount = testCase.actions.filter(action => action.type === 'click').length;
+    let extraClickCount = Math.max(0, allClickLines.length - plannedClickCount);
+    for (const lineIndex of allClickLines) {
+      if (extraClickCount === 0) break;
+      const normalizedLine = normalizeForMatching(lines[lineIndex]);
+      if (/(passwordinput|mat khau|password).*\.click\(/.test(normalizedLine)) {
+        lines[lineIndex] = '';
+        extraClickCount--;
+        changed = true;
+      }
+    }
+  }
+
+  return { code: lines.join('\n'), changed };
+}
+
+export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan): string {
   let fixed = code;
   const fixes: string[] = [];
 
@@ -311,6 +427,12 @@ export function fixCommonPlaywrightIssues(code: string): string {
       .replace(/```/g, "")
       .trim();
     fixes.push("FIX-0: Dọn dẹp lời thoại rác & markdown code fences từ model");
+  }
+
+  const passwordLocatorResult = fixPasswordToggleLocators(fixed, actionPlan);
+  if (passwordLocatorResult.changed) {
+    fixed = passwordLocatorResult.code;
+    fixes.push('FIX-13: Icon ẩn/hiện mật khẩu → locator đã được Crawler xác minh');
   }
 
   const passwordToggleResult = fixPasswordToggleAssertions(fixed);

@@ -7,6 +7,7 @@ import { TestPolicyHarness } from "./harness/policy.js";
 import { runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
 import { parseScript } from "./core/step-parser.js";
+import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 
 const harness = new TestPolicyHarness();
@@ -149,6 +150,7 @@ Vi du:
       const domReport = buildCompactDomReport(snapshotsMap);
 
       fs.writeFileSync("artifacts/crawled-dom.md", domReport);
+      buildActionPlan(parsedCases, snapshotsMap);
       console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
     } catch (err) {
       console.log(`   Warning: Live Crawler gap loi (khong anh huong kich ban): ${err.message}`);
@@ -248,7 +250,7 @@ async function runTests(level) {
 
   // Xác định lệnh chạy theo tầng
   let command = "";
-  if (level === "e2e") command = "npx playwright test tests/e2e/generated";
+  if (level === "e2e") command = "npx playwright test tests/e2e";
   else if (level === "integration")
     command = "npx vitest run tests/integration";
   else if (level === "unit") command = "npx vitest run tests/unit";
