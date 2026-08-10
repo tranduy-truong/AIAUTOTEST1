@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { chromium, Browser, Locator, Page } from 'playwright';
 import { ParsedStep, ParsedTestCase } from '../../core/step-parser.js';
 import {
@@ -286,6 +288,60 @@ async function uniqueLocator(page: Page, step: ParsedStep, snapshot: DomSnapshot
   return uniqueLocatorFor(page, step.type, step.target || '', snapshot);
 }
 
+async function locatorIsUniqueAndVisible(locator: Locator): Promise<boolean> {
+  try {
+    return await locator.count() === 1 && await locator.isVisible();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for a state-specific control instead of assuming that network-idle means
+ * a React drawer, dialog, or portal has finished rendering. The returned
+ * snapshot is real DOM evidence and is never used as a guessed locator.
+ */
+async function waitForVerifiedTarget(
+  page: Page,
+  stepType: ParsedStep['type'] | 'option',
+  target: string,
+  afterStep: string,
+  timeout = 8000,
+): Promise<DomSnapshot> {
+  const deadline = Date.now() + timeout;
+  let latestSnapshot = await captureSnapshot(page, afterStep);
+
+  while (Date.now() <= deadline) {
+    const resolution = resolveLocator(stepType, target, latestSnapshot);
+    if (resolution.confidence !== 'low') {
+      const candidates = locatorCandidates(page, resolution, target);
+      for (const candidate of candidates) {
+        if (await locatorIsUniqueAndVisible(candidate)) return latestSnapshot;
+      }
+    }
+
+    await page.waitForTimeout(200);
+    latestSnapshot = await captureSnapshot(page, afterStep);
+  }
+
+  const resolution = resolveLocator(stepType, target, latestSnapshot);
+  throw new Error(
+    `Trang thai moi khong hien thi locator duy nhat cho "${target}" (${resolution.matchedBy})`,
+  );
+}
+
+export function nextStateStep(
+  steps: ParsedStep[],
+  currentIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  for (let index = currentIndex + 1; index < steps.length; index++) {
+    const step = steps[index];
+    if (step.type === 'goto' || step.type === 'check' || step.type === 'wait') return undefined;
+    if (step.target) return { step, stepNumber: index + 1 };
+  }
+  return undefined;
+}
+
 async function waitForStateSettled(page: Page): Promise<void> {
   try {
     await page.waitForLoadState('networkidle', { timeout: 8000 });
@@ -296,12 +352,31 @@ async function waitForStateSettled(page: Page): Promise<void> {
   await waitForInteractiveDom(page);
 }
 
-function isPotentiallyDestructive(target: string): boolean {
+export function isPotentiallyDestructive(target: string): boolean {
   return /(xóa|xoá|delete|remove|thanh toán|payment|đặt hàng|place order|lưu|save|gửi|send)/iu.test(target);
+}
+
+export interface CrawlerFailure {
+  testCaseId: string;
+  stepNumber: number;
+  step: string;
+  currentUrl: string;
+  reason: string;
+}
+
+function writeCrawlerFailures(failures: CrawlerFailure[]): void {
+  const artifactsDir = path.join(process.cwd(), 'artifacts');
+  if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(artifactsDir, 'crawler-failures.json'),
+    JSON.stringify(failures, null, 2) + '\n',
+    'utf-8',
+  );
 }
 
 export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, DomSnapshot[]>> {
   const snapshotsMap = new Map<string, DomSnapshot[]>();
+  const failures: CrawlerFailure[] = [];
   let browser: Browser | null = null;
 
   try {
@@ -323,7 +398,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
             if (step.type === 'goto') {
               if (!step.url) throw new Error('Buoc goto khong co URL');
               await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
-              await waitForInteractiveDom(page);
+              await waitForStateSettled(page);
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
               continue;
             }
@@ -337,12 +412,27 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               await locator.fill(step.value || '', { timeout: 10000 });
             } else if (step.type === 'click') {
               if (isPotentiallyDestructive(step.target || '')) {
-                console.warn(`[Live Runner]   SKIP step ${stepNumber}: hanh dong co the thay doi du lieu`);
+                // Resolve the locator from the current DOM but never execute the
+                // destructive action. ActionPlan can therefore generate the
+                // verified click without the Crawler mutating production data.
+                await uniqueLocator(page, step, beforeAction);
+                console.warn(`[Live Runner]   VERIFY-ONLY step ${stepNumber}: khong thuc thi hanh dong thay doi du lieu`);
                 continue;
               }
               const locator = await uniqueLocator(page, step, beforeAction);
               await locator.click({ timeout: 10000 });
               await waitForStateSettled(page);
+
+              const expectedState = nextStateStep(testCase.steps, index);
+              if (expectedState) {
+                const readySnapshot = await waitForVerifiedTarget(
+                  page,
+                  expectedState.step.type,
+                  expectedState.step.target || '',
+                  `ready for step ${expectedState.stepNumber}: ${expectedState.step.raw}`,
+                );
+                snapshots.push(readySnapshot);
+              }
             } else if (step.type === 'select') {
               const locator = await uniqueLocator(page, step, beforeAction);
               if (await locator.evaluate(element => element.tagName.toLowerCase() === 'select')) {
@@ -350,8 +440,10 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               } else {
                 await locator.click({ timeout: 10000 });
                 await waitForStateSettled(page);
-                const optionSnapshot = await captureSnapshot(
+                const optionSnapshot = await waitForVerifiedTarget(
                   page,
+                  'option',
+                  step.value || '',
                   `during step ${stepNumber}: options for ${step.raw}`,
                 );
                 snapshots.push(optionSnapshot);
@@ -372,7 +464,15 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
             }
           } catch (error) {
-            console.warn(`[Live Runner]   WARNING step ${stepNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            const reason = error instanceof Error ? error.message : 'Unknown error';
+            failures.push({
+              testCaseId: testCase.id,
+              stepNumber,
+              step: step.raw,
+              currentUrl: page.url(),
+              reason,
+            });
+            console.warn(`[Live Runner]   WARNING step ${stepNumber}: ${reason} (URL: ${page.url()})`);
           }
         }
       } finally {
@@ -382,6 +482,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
     }
   } finally {
     if (browser) await browser.close();
+    writeCrawlerFailures(failures);
   }
 
   return snapshotsMap;
