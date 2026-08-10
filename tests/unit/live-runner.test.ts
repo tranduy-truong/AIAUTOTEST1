@@ -3,7 +3,9 @@ import {
   buildCompactDomReport,
   CAPTURE_SNAPSHOT_SCRIPT,
   isPotentiallyDestructive,
+  isLoginUrl,
   nextStateStep,
+  protectedGotoAfterLogin,
 } from '../../src/agents/crawler/live-runner.js';
 import type { ParsedStep } from '../../src/core/step-parser.js';
 
@@ -125,5 +127,32 @@ describe('state-aware crawler policy', () => {
     expect(isPotentiallyDestructive('Xóa tổ chức')).toBe(true);
     expect(isPotentiallyDestructive('Thêm')).toBe(false);
     expect(isPotentiallyDestructive('Đăng nhập')).toBe(false);
+  });
+
+  it('uses the declared protected navigation to verify an authentication step', () => {
+    const steps: ParsedStep[] = [
+      { type: 'click', target: 'Đăng nhập', raw: "- Bấm nút 'Đăng nhập'" },
+      {
+        type: 'goto',
+        url: 'https://example.com/quan-tri/to-chuc',
+        raw: '- Mở URL trang tổ chức',
+      },
+    ];
+
+    expect(protectedGotoAfterLogin(steps, 0)).toEqual({
+      step: steps[1],
+      stepNumber: 2,
+    });
+  });
+
+  it('does not treat another login URL as proof of authentication', () => {
+    const steps: ParsedStep[] = [
+      { type: 'click', target: 'Đăng nhập', raw: "- Bấm nút 'Đăng nhập'" },
+      { type: 'goto', url: 'https://example.com/dang-nhap', raw: '- Mở lại đăng nhập' },
+    ];
+
+    expect(protectedGotoAfterLogin(steps, 0)).toBeUndefined();
+    expect(isLoginUrl('https://example.com/dang-nhap?redirect=%2Fadmin')).toBe(true);
+    expect(isLoginUrl('https://example.com/quan-tri/to-chuc')).toBe(false);
   });
 });
