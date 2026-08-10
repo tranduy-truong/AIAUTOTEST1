@@ -32,6 +32,42 @@ describe('browser snapshot script', () => {
       selector: '#password-toggle',
     });
   });
+
+  it('captures drawer scope and custom dropdown semantics', () => {
+    document.body.innerHTML = `
+      <aside id="organization-drawer" role="dialog" aria-modal="true">
+        <div class="field">
+          <label>Loại hình tổ chức</label>
+          <button
+            id="organization-type"
+            role="combobox"
+            aria-haspopup="listbox"
+          >Chọn loại hình tổ chức</button>
+        </div>
+        <div role="listbox">
+          <div id="religious-option" role="option">Tổ chức tôn giáo</div>
+        </div>
+      </aside>
+    `;
+
+    const elements = window.eval(CAPTURE_SNAPSHOT_SCRIPT) as Array<Record<string, unknown>>;
+    const trigger = elements.find(element => element.id === 'organization-type');
+    const option = elements.find(element => element.id === 'religious-option');
+
+    expect(trigger).toMatchObject({
+      role: 'combobox',
+      ariaHasPopup: 'listbox',
+      labelText: 'Loại hình tổ chức',
+      scopeSelector: '#organization-drawer',
+      selector: '#organization-type',
+    });
+    expect(option).toMatchObject({
+      role: 'option',
+      text: 'Tổ chức tôn giáo',
+      scopeSelector: '#organization-drawer',
+      selector: '#religious-option',
+    });
+  });
 });
 
 describe('buildCompactDomReport', () => {
