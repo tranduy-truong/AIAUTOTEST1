@@ -61,6 +61,20 @@ describe('parseScript', () => {
     ]);
   });
 
+  it('accepts a visible message with missing or unbalanced quotes', () => {
+    expect(parseAssertions(
+      "Có thông báo Trường này không thể để trống.' xuất hiện",
+    )).toEqual([
+      { kind: 'text_visible', value: 'Trường này không thể để trống.' },
+    ]);
+
+    expect(parseAssertions(
+      'Có thông báo Trường này không thể để trống. xuất hiện',
+    )).toEqual([
+      { kind: 'text_visible', value: 'Trường này không thể để trống.' },
+    ]);
+  });
+
   it('accepts descriptive test case identifiers', () => {
     const cases = parseScript([
       'TC_LOGIN_07: Bỏ trống hai trường',
@@ -102,6 +116,34 @@ describe('parseScript', () => {
     expect(cases[0].steps[8]).toMatchObject({ target: 'tôn giáo', value: 'Công giáo' });
     expect(cases[0].steps[9]).toMatchObject({ type: 'click', target: 'Lưu' });
     expect(validateParsedScript(cases)).toEqual([]);
+  });
+
+  it('parses an organization validation flow without turning blank fields into actions', () => {
+    const cases = parseScript([
+      'TC_02: Thêm tổ chức thất bại',
+      '- Mở URL: https://example.com/dang-nhap',
+      "- Nhập 'test' vào ô 'Nhập tên đăng nhập'",
+      "- Nhập 'Abc@12345' vào ô 'Nhập mật khẩu'",
+      "- Bấm nút 'Đăng nhập'",
+      '- Kiểm tra: URL không còn chứa \'dang-nhap\'',
+      '- Mở URL: https://example.com/quan-tri/to-chuc',
+      '- Bấm nút có chữ "Thêm"',
+      "- Nhập 'Tổ chức Test 2' vào ô 'Nhập tên tổ chức'",
+      "- Nhập 'International name' vào ô 'Nhập tên quốc tế'",
+      "- Nhập 'ITN' vào ô 'Nhập tên viết tắt'",
+      "- Dropdown chọn loại hình tổ chức, chọn 'Tổ chức tôn giáo trực thuộc'",
+      '- Dropdown chọn tôn giáo bỏ trống',
+      "- Dropdown 'Chọn trụ sở chính' chọn 'Chùa Vĩnh Nghiêm'",
+      "- Nhấn nút 'Lưu'",
+      "- Kiểm tra: Có thông báo Trường này không thể để trống.' xuất hiện",
+    ].join('\n'));
+
+    expect(validateParsedScript(cases)).toEqual([]);
+    expect(cases[0].steps.filter(step => step.type === 'select')).toHaveLength(2);
+    expect(cases[0].steps.at(-1)).toMatchObject({
+      type: 'check',
+      assertions: [{ kind: 'text_visible', value: 'Trường này không thể để trống.' }],
+    });
   });
 
   it('extracts a plain URL from Markdown without retaining link syntax', () => {
