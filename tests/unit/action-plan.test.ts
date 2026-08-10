@@ -286,4 +286,40 @@ describe('buildActionPlan', () => {
       "await page.waitForURL('https://example.com/dashboard'",
     );
   });
+
+  it('generates a destructive click when its locator was verified without executing it', () => {
+    const testCase: ParsedTestCase = {
+      id: 'TC_01',
+      name: 'Lưu tổ chức',
+      url: 'https://example.com/to-chuc',
+      unparsedSteps: [],
+      steps: [
+        { type: 'goto', url: 'https://example.com/to-chuc', raw: '- Mở URL' },
+        { type: 'click', target: 'Lưu', raw: "- Nhấn nút 'Lưu'" },
+      ],
+    };
+    const beforeSave: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'before step 2: save organization',
+      elements: [{
+        tag: 'button',
+        text: 'Lưu',
+        accessibleName: 'Lưu',
+        selector: '#save-organization',
+        isVisible: true,
+      }],
+    };
+
+    const plan = buildActionPlan(
+      [testCase],
+      new Map([['TC_01', [beforeSave]]]),
+      { persist: false },
+    );
+
+    expect(plan.testCases[0].actions[1]).toMatchObject({
+      confidence: 'high',
+      matchedBy: 'role+name',
+      playwrightCode: "await page.getByRole('button', { name: 'Lưu', exact: true }).click();",
+    });
+  });
 });
