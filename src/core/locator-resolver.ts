@@ -90,6 +90,43 @@ function uniqueVisibleMatchPreferringScope(
   return scopedMatch || uniqueVisibleMatch(elements, predicate);
 }
 
+function canonicalOptionMatch(
+  elements: ElementInfo[],
+  target: string,
+): ElementInfo | undefined {
+  const scored = elements
+    .filter(element =>
+      element.isVisible &&
+      Boolean(element.selector) &&
+      (
+        textMatches(element.text, target) ||
+        textMatches(element.accessibleName, target) ||
+        textMatches(element.dataValue, target)
+      ),
+    )
+    .map(element => {
+      const role = normalizeText(element.role || '');
+      const slot = normalizeText(element.dataSlot || '');
+      let score = 0;
+
+      if (element.tag === 'option' || role === 'option') score += 100;
+      else if (['menuitem', 'menuitemradio', 'menuitemcheckbox', 'treeitem'].includes(role)) score += 90;
+
+      if (/(?:^| )(?:item|option)$/.test(slot)) score += 70;
+      if (/(?:select|dropdown|command|combobox|listbox)/.test(slot)) score += 20;
+      if (textMatches(element.dataValue, target)) score += 30;
+      if (normalizeText(element.text || '') === target) score += 10;
+
+      return { element, score };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0) return undefined;
+  if (scored.length > 1 && scored[0].score === scored[1].score) return undefined;
+  return scored[0].element;
+}
+
 function escapeSingleQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -360,14 +397,7 @@ export function resolveLocator(
   // 4. Resolve an option only after the Crawler opened the dropdown and
   // captured the overlay/listbox state.
   if (stepType === 'option') {
-    const option = uniqueVisibleMatch(elements, el =>
-      (el.role === 'option' || el.tag === 'option' || el.role === 'menuitem') &&
-      (
-        textMatches(el.text, target) ||
-        textMatches(el.accessibleName, target) ||
-        textMatches(el.dataValue, target)
-      ),
-    );
+    const option = canonicalOptionMatch(elements, target);
     if (option) {
       if (option.role === 'option' || option.tag === 'option') {
         const safeName = escapeSingleQuoted((option.accessibleName || option.text || stepTarget).trim());
