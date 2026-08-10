@@ -23,6 +23,11 @@ export interface ParsedTestCase {
   unparsedSteps: string[]; // Step-like lines that need user/Planner review
 }
 
+export interface ScriptValidationIssue {
+  testCaseId: string;
+  step: string;
+}
+
 const STEP_BULLET = /^[-*•·▪◦–—]\s*/u;
 
 function normalizeVietnamese(value: string): string {
@@ -46,6 +51,15 @@ function extractQuotedLiterals(value: string): string[] {
   }
 
   return literals;
+}
+
+/** Accept plain URLs and Markdown links pasted from rich-text editors. */
+export function extractHttpUrl(value: string): string | undefined {
+  const markdownLink = value.match(/\[(https?:\/\/[^\]]+)\]\((https?:\/\/[^)]+)\)/i);
+  if (markdownLink) return markdownLink[2].trim();
+
+  const plainUrl = value.match(/https?:\/\/[^\s\])}>]+/i)?.[0];
+  return plainUrl?.replace(/[.,;:!?]+$/, '');
 }
 
 /**
@@ -153,9 +167,9 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
     if (!line) continue;
 
     // 1. Nhận diện Global URL (được khai báo ở đầu kịch bản, trước các Test Case)
-    const globalUrlMatch = line.match(/^URL:\s*(http.*)$/i);
+    const globalUrlMatch = line.match(/^URL:\s*(.+)$/i);
     if (!currentTC && globalUrlMatch) {
-      globalUrl = globalUrlMatch[1].trim();
+      globalUrl = extractHttpUrl(globalUrlMatch[1]);
       continue;
     }
 
@@ -190,10 +204,10 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
     let match: RegExpMatchArray | null = null;
 
     // 4. Nhận diện bước "Mở URL"
-    match = rawLine.match(/^Mở URL(?:\s*:\s*(http.*))?$/i);
+    match = rawLine.match(/^Mở URL(?:\s*:\s*(.+))?$/i);
     if (match) {
-      const stepUrl = match[1]?.trim() || currentTC.url || globalUrl;
-      if (match[1]?.trim()) {
+      const stepUrl = match[1] ? extractHttpUrl(match[1]) : currentTC.url || globalUrl;
+      if (stepUrl) {
         currentTC.url = stepUrl; // Cập nhật URL chính của TC nếu có URL mới
       }
       step = { type: 'goto', url: stepUrl, raw: line };
@@ -208,14 +222,14 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
     // 6. Nhận diện bước "Click / Bấm"
     // Mẫu 1: Bấm nút 'Z', Click nút 'Z', Bấm vào nút 'Z', Bấm nút có chữ 'Z' (Hỗ trợ nháy kép hoặc đơn)
     if (!step) {
-      match = rawLine.match(/^(?:Bấm|Click)(?:\s+vào)?\s+(?:nút|icon)(?:\s+có\s+chữ)?\s+['"]([^'"]+)['"]/i);
+      match = rawLine.match(/^(?:Bấm|Click|Nhấn|Nhấp|Chạm)(?:\s+vào)?\s+(?:nút|icon)(?:\s+có\s+chữ)?\s+['"]([^'"]+)['"]/i);
       if (match) {
         step = { type: 'click', target: match[1], raw: line };
       }
     }
     // Mẫu 2: Bấm vào icon ... (Không có dấu nháy)
     if (!step) {
-      match = rawLine.match(/^(?:Bấm|Click)(?:\s+vào)?\s+icon\s+(.*)$/i);
+      match = rawLine.match(/^(?:Bấm|Click|Nhấn|Nhấp|Chạm)(?:\s+vào)?\s+icon\s+(.*)$/i);
       if (match) {
         step = { type: 'click', target: match[1].replace(/['"]/g, '').trim(), raw: line };
       }
@@ -234,6 +248,20 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
       match = rawLine.match(/^Chọn\s+['"]([^'"]+)['"]\s+trong\s+dropdown\s+['"]([^'"]+)['"]/i);
       if (match) {
         step = { type: 'select', value: match[1], target: match[2], raw: line };
+      }
+    }
+    // Mẫu 3: Dropdown chọn loại hình tổ chức, chọn 'Tổ chức tôn giáo'
+    if (!step) {
+      match = rawLine.match(/^Dropdown\s+(?:chọn\s+)?(.+?)\s*,\s*chọn\s+['"]([^'"]+)['"]\s*$/i);
+      if (match) {
+        step = { type: 'select', target: match[1].trim(), value: match[2].trim(), raw: line };
+      }
+    }
+    // Mẫu 4: Tại dropdown 'Tôn giáo', chọn 'Công giáo'
+    if (!step) {
+      match = rawLine.match(/^(?:Tại\s+)?dropdown\s+['"]([^'"]+)['"]\s*,\s*chọn\s+['"]([^'"]+)['"]\s*$/i);
+      if (match) {
+        step = { type: 'select', target: match[1].trim(), value: match[2].trim(), raw: line };
       }
     }
 
@@ -272,4 +300,11 @@ export function parseScript(scriptText: string): ParsedTestCase[] {
   }
 
   return testCases;
+}
+
+export function validateParsedScript(testCases: ParsedTestCase[]): ScriptValidationIssue[] {
+  return testCases.flatMap(testCase => testCase.unparsedSteps.map(step => ({
+    testCaseId: testCase.id,
+    step,
+  })));
 }
