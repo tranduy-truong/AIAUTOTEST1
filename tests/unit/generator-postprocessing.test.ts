@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import type { ActionPlan } from '../../src/core/action-plan.js';
 import {
+  buildGeneratorContext,
   clearGeneratedE2ESpecs,
   fixCommonPlaywrightIssues,
   getGeneratedTestDirectory,
@@ -191,6 +192,49 @@ describe('limitDomReport', () => {
 
     expect(limited.length).toBeLessThan(1_100);
     expect(limited).toContain('truncated');
+  });
+});
+
+describe('Generator token budget', () => {
+  it('sends one merged Planner/Crawler contract instead of four duplicate contexts', () => {
+    const actionPlan: ActionPlan = {
+      testCases: Array.from({ length: 10 }, (_, testIndex) => ({
+        id: `TC_${String(testIndex + 1).padStart(2, '0')}`,
+        name: `Test ${testIndex + 1}`,
+        baseUrl: 'https://example.com/login',
+        needsLogin: false,
+        actions: Array.from({ length: 6 }, (_, actionIndex) => ({
+          stepIndex: actionIndex + 1,
+          type: actionIndex === 0 ? 'goto' as const : 'click' as const,
+          description: 'Mô tả rất dài không cần gửi lặp lại cho Generator '.repeat(8),
+          playwrightCode: actionIndex === 0
+            ? "await page.goto('https://example.com/login');"
+            : `await page.locator('[data-step="${actionIndex}"]').click();`,
+          confidence: 'high' as const,
+        })),
+      })),
+    };
+    const structuredPlannerPlan = JSON.stringify({
+      testCases: actionPlan.testCases.map(testCase => ({
+        id: testCase.id,
+        name: `Planner ${testCase.name}`,
+      })),
+    });
+
+    const context = buildGeneratorContext({
+      testPlan: 'MARKDOWN_DUPLICATE'.repeat(1_000),
+      structuredPlannerPlan,
+      verifiedActionPlan: actionPlan,
+      sourceScript: 'SOURCE_DUPLICATE'.repeat(1_000),
+      crawledDomData: 'DOM_DUPLICATE'.repeat(1_000),
+    });
+
+    expect(context.length).toBeLessThan(10_000);
+    expect(context).toContain('Planner Test 1');
+    expect(context).not.toContain('MARKDOWN_DUPLICATE');
+    expect(context).not.toContain('SOURCE_DUPLICATE');
+    expect(context).not.toContain('DOM_DUPLICATE');
+    expect(context).not.toContain('Mô tả rất dài');
   });
 });
 

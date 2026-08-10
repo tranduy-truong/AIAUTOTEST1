@@ -21,10 +21,12 @@ export class OpenAIAdapter {
     promptDir,
     workDir,
     timeoutMs,
+    maxTokens,
   }: {
     promptDir: string;
     workDir: string;
     timeoutMs: number;
+    maxTokens?: number;
   }) {
     try {
       const taskContent = fs.readFileSync(
@@ -36,6 +38,7 @@ export class OpenAIAdapter {
         model: this.model,
         messages: [{ role: "user", content: taskContent }],
         temperature: 0.1,
+        max_tokens: maxTokens,
       });
 
       const output = response.choices[0].message.content || "";

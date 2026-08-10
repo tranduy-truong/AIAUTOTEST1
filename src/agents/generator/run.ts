@@ -6,6 +6,7 @@ import type { ActionPlan, ResolvedAction } from "../../core/action-plan.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const MAX_DOM_REPORT_CHARS = 8000;
+export const MAX_GENERATOR_FALLBACK_CHARS = 10000;
 
 export function limitDomReport(report: string, maxChars = MAX_DOM_REPORT_CHARS): string {
   if (report.length <= maxChars) return report;
@@ -42,21 +43,92 @@ function loadVerifiedActionPlan(level: "unit" | "integration" | "e2e"): ActionPl
   }
 }
 
-function compactActionPlan(plan: ActionPlan): string {
+function readPlannerNames(rawPlan: string): Map<string, string> {
+  if (!rawPlan) return new Map();
+  try {
+    const parsed = JSON.parse(rawPlan) as { testCases?: Array<{ id?: string; name?: string }> };
+    return new Map(
+      (parsed.testCases || [])
+        .filter(testCase => testCase.id && testCase.name)
+        .map(testCase => [testCase.id!.toUpperCase(), testCase.name!]),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function compactAgentContract(plan: ActionPlan, structuredPlannerPlan = ''): string {
+  const plannerNames = readPlannerNames(structuredPlannerPlan);
   return JSON.stringify({
+    contract: 'planner-generator-crawler-v1',
     testCases: plan.testCases.map(testCase => ({
       id: testCase.id,
+      name: plannerNames.get(testCase.id.toUpperCase()) || testCase.name,
       actions: testCase.actions.map(action => ({
         stepIndex: action.stepIndex,
         type: action.type,
-        description: action.description,
         playwrightCode: action.playwrightCode,
         confidence: action.confidence,
-        matchedBy: action.matchedBy,
-        assertions: action.assertions,
       })),
     })),
-  }, null, 2);
+  });
+}
+
+function compactStructuredPlannerPlan(rawPlan: string): string {
+  if (!rawPlan) return '';
+  try {
+    const parsed = JSON.parse(rawPlan) as {
+      testCases?: Array<{
+        id?: string;
+        name?: string;
+        url?: string;
+        steps?: Array<Record<string, unknown>>;
+      }>;
+    };
+    return JSON.stringify({
+      contract: 'planner-generator-v1',
+      testCases: (parsed.testCases || []).map(testCase => ({
+        id: testCase.id,
+        name: testCase.name,
+        url: testCase.url,
+        steps: (testCase.steps || []).map(step => ({
+          stepIndex: step.stepIndex,
+          type: step.type,
+          target: step.target,
+          value: step.value,
+          url: step.url,
+          assertions: step.assertions,
+        })),
+      })),
+    });
+  } catch {
+    return '';
+  }
+}
+
+export function buildGeneratorContext(options: {
+  testPlan: string;
+  structuredPlannerPlan?: string;
+  verifiedActionPlan?: ActionPlan;
+  sourceScript?: string;
+  crawledDomData?: string;
+}): string {
+  if (options.verifiedActionPlan) {
+    return `[HỢP ĐỒNG ĐÃ HỢP NHẤT TỪ PLANNER VÀ CRAWLER - PLAYWRIGHT CODE LÀ BẮT BUỘC]:\n${compactAgentContract(
+      options.verifiedActionPlan,
+      options.structuredPlannerPlan,
+    )}`;
+  }
+
+  const structured = compactStructuredPlannerPlan(options.structuredPlannerPlan || '');
+  if (structured) {
+    return `[TEST PLAN CÓ CẤU TRÚC DO PLANNER XUẤT RA]:\n${structured}\n${options.crawledDomData || ''}`;
+  }
+
+  const fallback = [options.testPlan, options.sourceScript, options.crawledDomData]
+    .filter(Boolean)
+    .join('\n\n');
+  return `[NGỮ CẢNH E2E DỰ PHÒNG]:\n${limitDomReport(fallback, MAX_GENERATOR_FALLBACK_CHARS)}`;
 }
 
 export async function runGenerator(
@@ -123,20 +195,23 @@ export async function runGenerator(
       domReport;
   }
 
+  const generatorContext = level === 'e2e'
+    ? buildGeneratorContext({
+        testPlan,
+        structuredPlannerPlan,
+        verifiedActionPlan,
+        sourceScript,
+        crawledDomData,
+      })
+    : testPlan;
+
   const prompt = `
 ${systemPrompt}
 
 Bạn là chuyên gia tự động hóa kiểm thử. Dựa vào bản Test Plan dưới đây, hãy viết code test hoàn chỉnh bằng ${framework}.
 
-[TEST PLAN]:
-${testPlan}
-${crawledDomData}
-
-${structuredPlannerPlan ? `[TEST PLAN CÓ CẤU TRÚC DO PLANNER XUẤT RA - MỖI ASSERTION LÀ MỘT KIỂM TRA RIÊNG]:\n${structuredPlannerPlan}` : ''}
-
-${verifiedActionPlan ? `[ACTION PLAN ĐÃ ĐƯỢC CRAWLER XÁC MINH - PLAYWRIGHT CODE TRONG TỪNG ACTION LÀ BẮT BUỘC]:\n${compactActionPlan(verifiedActionPlan)}` : ''}
-
-${sourceScript ? `[KỊCH BẢN GỐC - NGUỒN SỰ THẬT CHO THỨ TỰ BƯỚC, TEST DATA VÀ ASSERTION]:\n${sourceScript}` : ''}
+[NGỮ CẢNH DUY NHẤT]:
+${generatorContext}
 
 [QUY TẮC QUAN TRỌNG - PHẢI TUÂN THỦ TUYỆT ĐỐI]:
 1. Kịch bản gốc quyết định chính xác thứ tự bước, dữ liệu nhập và assertion; Test Plan chỉ bổ sung ý nghĩa nghiệp vụ.
@@ -185,6 +260,7 @@ test.describe('Product', () => {
     promptDir: workDir,
     workDir,
     timeoutMs: 120000,
+    maxTokens: level === 'e2e' ? 3000 : undefined,
   });
 
   // 5. Trích xuất code và ghi ra thư mục đích
