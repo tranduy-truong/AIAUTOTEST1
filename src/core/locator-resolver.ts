@@ -226,7 +226,7 @@ export function resolveLocator(
       const role = (byText.tag === 'a' || byText.role === 'link') ? 'link' : 'button';
       const safeName = escapeSingleQuoted((byText.accessibleName || byText.text).trim());
       return {
-        locator: `page.getByRole('${role}', { name: '${safeName}' })`,
+        locator: `page.getByRole('${role}', { name: '${safeName}', exact: true })`,
         confidence: 'high',
         matchedBy: 'role+name',
         element: byText
@@ -283,7 +283,7 @@ export function resolveLocator(
     if (linkByText && linkByText.text) {
       const safeName = linkByText.text.trim().replace(/'/g, "\\'");
       return {
-        locator: `page.getByRole('link', { name: '${safeName}' })`,
+        locator: `page.getByRole('link', { name: '${safeName}', exact: true })`,
         confidence: 'medium',
         matchedBy: 'link_name',
         element: linkByText
