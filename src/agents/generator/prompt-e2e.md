@@ -28,9 +28,11 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
    - **TUYỆT ĐỐI CẤM**: `page.waitForTimeout()`, `setTimeout()`. Lợi dụng tính năng Auto-waiting của Playwright.
 4. **ASSERTION BẮT BUỘC**:
    - Sử dụng `await expect(locator).toHaveText()`, `toHaveURL()`, `toBeVisible()`, `toContainText()`.
-5. **SỬ DỤNG ĐÚNG DỮ LIỆU TEST TỪ PROMPT NGƯỜI DÙNG (CỰC KỲ QUAN TRỌNG)**:
-   - Nếu người dùng CÓ cung cấp dữ liệu test cụ thể trong prompt (ví dụ: username là `admin`, mật khẩu là `123123`), **BẮT BUỘC PHẢI DÙNG CHÍNH XÁC DỮ LIỆU ĐÓ** trong code (ví dụ `fill('admin')`, `fill('123123')`).
-   - **TUYỆT ĐỐI CẤM**: Không tự thay thế dữ liệu thực tế do người dùng cung cấp thành các chuỗi placeholder chung chung như `'tài_khoản_hợp_lệ'`, `'mật_khẩu_hợp_lệ'`, `'valid_user'`.
+5. **GIỮ ĐÚNG DỮ LIỆU TEST NHƯNG KHÔNG ĐƯỢC HARD-CODE SECRET**:
+   - URL môi trường, username, password và token PHẢI đọc từ `process.env` (ví dụ: `E2E_BASE_URL`, `E2E_USERNAME`, `E2E_PASSWORD`).
+   - Giá trị trong biến môi trường phải tương ứng chính xác dữ liệu kịch bản; không thay bằng dữ liệu tự đoán.
+   - CAM đưa mật khẩu vào tên test, source code, log hoặc comment.
+   - Với dữ liệu không bí mật như chuỗi validation, giá trị biên hoặc payload kiểm thử bảo mật, có thể giữ literal trong test.
 6. **MÃ NGUỒN HOÀN CHỈNH**:
    - **CẤM** sử dụng ký hiệu gạch ba chấm `...`, `// TODO`, `// your code here`.
 7. **XỬ LÝ DROPDOWN / PHẦN TỬ ẨN**:
@@ -54,19 +56,24 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
      ✅ `await expect(page.getByText('Invalid credentials')).toBeVisible();`
 12. **ĐẶT TÊN TEST CASE RÕ RÀNG & TƯỜNG MINH (BẮT BUỘC)**:
    - Tên test case trong `test('ID - Tên tường minh', ...)` PHẢI viết đầy đủ bằng tiếng Việt mô tả chi tiết trường hợp kiểm thử.
-   - Ví dụ: `test('TC_LOGIN_01 - Đăng nhập thành công với tài khoản admin và mật khẩu 123123', async ({ page }) => { ... })`
+   - Ví dụ: `test('TC_LOGIN_01 - Đăng nhập thành công với tài khoản hợp lệ', async ({ page }) => { ... })`
 13. **SINH CODE CHÍNH XÁC SỐ LƯỢNG TEST CASES (KHÔNG THÊM, KHÔNG BỚT)**:
    - Nếu trong kịch bản có đúng N test cases, bạn PHẢI viết đúng N khối `test('TC_...', ...)`.
    - **TUYỆT ĐỐI CẤM bỏ bớt**: Không cắt giảm test cases trong kịch bản.
    - **TUYỆT ĐỐI CẤM tự thêm**: Không tự ý sinh thêm test cases ngoài kịch bản (ví dụ không tự thêm TC_02 "Đăng nhập thất bại" khi kịch bản chỉ có TC_01).
 14. **QUY TAC ASSERTION CHO INPUT VA ICON (CUC KY QUAN TRONG)**:
    - **Input Fields (`getByPlaceholder`, `getByRole('textbox')`, `locator('input')`)**: `<input>` KHONG co textContent. BAT BUOC dung:
-     - Kiem tra gia tri: `await expect(page.getByPlaceholder('...')).toHaveValue('123123');`
+     - Kiem tra gia tri: `await expect(page.getByPlaceholder('...')).toHaveValue(process.env.E2E_PASSWORD!);`
      - Kiem tra type input: `await expect(page.getByPlaceholder('...')).toHaveAttribute('type', 'text');`
      - CAM dung `.toContainText()` hay `.toHaveText()` tren `<input>` (se luon nhan ve chuoi rong "").
    - **Icon Con Mat (An/Hien mat khau o trang Dang nhap)**:
-     CAM dung `getByRole('button', { name: 'Hien mat khau' })` hoac `text="Hien mat khau"` (vi icon khong co text).
-     BAT BUOC DUNG: `await page.locator('.lucide-eye, .lucide-eye-off, [data-align="inline-end"], [class*="eye"]').first().click();`
+     - Locator icon PHAI lay tu `Verified selector`, aria-label, role/name hoac metadata co trong bao cao DOM. CAM tu doan `.lucide-eye`, `.fa-eye`, `[class*="eye"]` neu DOM khong cung cap.
+     - Neu DOM khong co locator duy nhat da xac minh, dung `test.fixme(true, 'Khong co locator duoc xac minh cho icon an/hien mat khau')`.
+     - Gia tri mat khau KHONG thay doi khi an/hien. CAM dung `toHaveValue()` hoac `not.toHaveValue()` de ket luan mat khau dang an hay hien.
+     - Truoc khi click: `await expect(password).toHaveAttribute('type', 'password');`
+     - Sau click lan 1: `await expect(password).toHaveAttribute('type', 'text');`
+     - Sau click lan 2: `await expect(password).toHaveAttribute('type', 'password');`
+     - Co the dung `toHaveValue()` rieng de xac nhan gia tri van duoc giu nguyen, nhung KHONG duoc dung no thay cho assertion `type`.
    - **Icon trong Bang Data Table**:
      CAM dung `.nth()` de dinh vi icon theo vi tri. Phai dung locator cu the:
      - Uu tien `getByRole('button', { name: /regex/i })` neu icon co aria-label.
@@ -87,9 +94,9 @@ Tiếp nhận bản Test Plan (JSON hoặc Markdown) kèm dữ liệu DOM cào t
    - **BẮT BUỘC KHAI BÁO HÀM LOGIN HELPER**:
      ```typescript
      async function login(page) {
-       await page.goto('https://hcm.mobifone.vn/qly-dttg/dang-nhap');
-       await page.getByPlaceholder('Nhập tên đăng nhập').fill('test');
-       await page.getByPlaceholder('Nhập mật khẩu').fill('Abc@12345');
+       await page.goto(process.env.E2E_BASE_URL!);
+       await page.getByPlaceholder('Nhập tên đăng nhập').fill(process.env.E2E_USERNAME!);
+       await page.getByPlaceholder('Nhập mật khẩu').fill(process.env.E2E_PASSWORD!);
        await page.getByRole('button', { name: 'Đăng nhập' }).click();
        await expect(page).not.toHaveURL(/.*(dang-nhap|login).*/i);
      }

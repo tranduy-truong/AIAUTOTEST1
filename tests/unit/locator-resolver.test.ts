@@ -29,4 +29,15 @@ describe('resolveLocator', () => {
     expect(resolved.locator).not.toContain('[class*="eye"]');
     expect(resolved.confidence).toBe('low');
   });
+
+  it('uses input type instead of value for password visibility assertions', () => {
+    expect(resolveLocator('check', 'Mật khẩu chuyển sang dạng văn bản đọc được')).toMatchObject({
+      locator: expect.stringContaining("toHaveAttribute('type', 'text')"),
+      confidence: 'high',
+    });
+    expect(resolveLocator('check', 'Mật khẩu quay lại dạng ẩn')).toMatchObject({
+      locator: expect.stringContaining("toHaveAttribute('type', 'password')"),
+      confidence: 'high',
+    });
+  });
 });

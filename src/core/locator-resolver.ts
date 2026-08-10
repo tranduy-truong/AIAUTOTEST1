@@ -288,14 +288,22 @@ export function resolveLocator(
         matchedBy: 'assert_text_visible'
       };
     }
-    if (target.includes('mat khau dang an')) {
+    if (
+      target.includes('mat khau dang an') ||
+      target.includes('mat khau quay lai dang an') ||
+      target.includes('mat khau bi an')
+    ) {
       return {
         locator: `await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'password');`,
         confidence: 'high',
         matchedBy: 'assert_password_hidden'
       };
     }
-    if (target.includes('mat khau dang van ban')) {
+    if (
+      target.includes('mat khau dang van ban') ||
+      target.includes('mat khau chuyen sang dang van ban') ||
+      (target.includes('mat khau') && target.includes('doc duoc'))
+    ) {
       return {
         locator: `await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'text');`,
         confidence: 'high',

@@ -94,14 +94,14 @@ Không viết bất kỳ đoạn code Playwright / JavaScript / TypeScript nào.
 
 ### R03 — Test Data PHẢI dùng dữ liệu thực từ kịch bản
 
-- Nếu kịch bản ghi `username: 'test'`, `password: 'Abc@12345'` → phải ghi đúng trong Test Data.
+- Nếu kịch bản có username/password cụ thể → giữ đúng ý nghĩa trong Test Data nhưng đánh dấu là dữ liệu nhạy cảm để Generator đưa vào biến môi trường.
 - Không dùng placeholder chung chung: `[valid_user]`, `[correct_password]`.
 - Nếu kịch bản bỏ trống một ô → ghi rõ: `Để trống`.
 
 ### R04 — URL phải ghi rõ ràng trong Preconditions và Test Steps
 
 - Nếu kịch bản có URL → ghi y hệt URL đó.
-- Ví dụ: `Truy cập https://hcm.mobifone.vn/qly-dttg/dang-nhap`.
+- Ví dụ: `Truy cập https://staging.example.com/login`.
 - Không được rút gọn thành `/dang-nhap` hay `[Login URL]`.
 
 ### R05 — Tiêu chí Preconditions cho test case SAU đăng nhập
@@ -126,7 +126,7 @@ Mỗi bước là một hành động/kiểm tra đơn lẻ. Không gộp nhiề
 Format: `TC_[MODULE]_[STT] - [Hành động + Điều kiện + Kết quả mong đợi]`
 
 - ❌ Sai: `TC_01 - Đăng nhập`
-- ✅ Đúng: `TC_LOGIN_01 - Đăng nhập thành công với tài khoản test/Abc@12345, URL chuyển khỏi /dang-nhap`
+- ✅ Đúng: `TC_LOGIN_01 - Đăng nhập thành công với tài khoản hợp lệ, URL chuyển khỏi /dang-nhap`
 
 ### R08 — Với kịch bản Script Mode: KHÔNG tự sáng tạo thêm
 
@@ -146,7 +146,7 @@ Khi kịch bản đề cập tới:
 | URL sau hành động | `URL chuyển sang [URL mới]` hoặc `URL không còn chứa '[slug]'` |
 | Thông báo popup/toast | `Xuất hiện thông báo: "[Nội dung thông báo chính xác]"` |
 | Giá trị ô input | `Ô [Tên ô] hiển thị giá trị: "[giá trị]"` |
-| Type của ô mật khẩu | `Ô mật khẩu chuyển sang type="text" (hiển thị rõ ký tự)` |
+| Type của ô mật khẩu | `Ô mật khẩu chuyển giữa type="password" và type="text"; value không thay đổi` |
 | Dữ liệu trong bảng | `Bảng xuất hiện dòng mới với [Tên cột]: "[Giá trị]"` |
 | Form validation | `Ô [Tên ô] hiển thị thông báo lỗi: "[Nội dung lỗi]"` |
 

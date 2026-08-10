@@ -214,7 +214,63 @@ test.describe('Product', () => {
 // ★ POST-PROCESSING ENGINE: Tự động sửa các lỗi phổ biến của AI
 //   trước khi ghi file — KHÔNG phụ thuộc vào LLM "nghe lời"
 // ═══════════════════════════════════════════════════════════════════
-function fixCommonPlaywrightIssues(code: string): string {
+function fixPasswordToggleAssertions(code: string): { code: string; changed: boolean } {
+  const lines = code.split('\n');
+  const testStarts = lines
+    .map((line, index) => (/^\s*test\s*\(/.test(line) ? index : -1))
+    .filter(index => index >= 0);
+  let changed = false;
+
+  for (let testPosition = 0; testPosition < testStarts.length; testPosition++) {
+    const start = testStarts[testPosition];
+    const end = testStarts[testPosition + 1] ?? lines.length;
+    const titleLine = lines[start]
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+    if (!/(an\s*\/\s*hien\s+mat\s+khau|icon\s+con\s+mat|password.*visibility|show.*hide.*password)/i.test(titleLine)) {
+      continue;
+    }
+
+    const fillIndex = lines.findIndex((line, index) =>
+      index >= start &&
+      index < end &&
+      /(?:mat khau|mật khẩu|password)/i.test(line) &&
+      /\.fill\(/.test(line),
+    );
+    if (fillIndex < 0) continue;
+
+    const clickIndices: number[] = [];
+    for (let index = fillIndex + 1; index < end; index++) {
+      if (/\.click\(/.test(lines[index])) clickIndices.push(index);
+    }
+
+    clickIndices.forEach((clickIndex, clickPosition) => {
+      const assertionEnd = clickIndices[clickPosition + 1] ?? end;
+      const assertionLines = lines.slice(clickIndex + 1, assertionEnd);
+      if (assertionLines.some(line => /toHaveAttribute\(\s*['"]type['"]/.test(line))) return;
+
+      const wrongOffset = assertionLines.findIndex(line =>
+        /(?:mat khau|mật khẩu|password)/i.test(line) &&
+        /\.(?:not\.)?toHaveValue\(/.test(line),
+      );
+      if (wrongOffset < 0) return;
+
+      const wrongIndex = clickIndex + 1 + wrongOffset;
+      const match = lines[wrongIndex].match(/^(\s*)await\s+expect\((.+)\)\.(?:not\.)?toHaveValue\([^;]*\);?\s*$/);
+      if (!match) return;
+
+      const expectedType = clickPosition % 2 === 0 ? 'text' : 'password';
+      lines[wrongIndex] = `${match[1]}await expect(${match[2]}).toHaveAttribute('type', '${expectedType}');`;
+      changed = true;
+    });
+  }
+
+  return { code: lines.join('\n'), changed };
+}
+
+export function fixCommonPlaywrightIssues(code: string): string {
   let fixed = code;
   const fixes: string[] = [];
 
@@ -231,6 +287,12 @@ function fixCommonPlaywrightIssues(code: string): string {
       .replace(/```/g, "")
       .trim();
     fixes.push("FIX-0: Dọn dẹp lời thoại rác & markdown code fences từ model");
+  }
+
+  const passwordToggleResult = fixPasswordToggleAssertions(fixed);
+  if (passwordToggleResult.changed) {
+    fixed = passwordToggleResult.code;
+    fixes.push("FIX-12: Ẩn/hiện mật khẩu → kiểm tra type='text'/'password', không kiểm tra value");
   }
   // ── FIX 8: Fix selectOption() on custom dropdowns ──────────────────────
   const selectOptionPattern = /await\s+page\.getByRole\(['"]option['"],\s*\{\s*name:\s*['"](.*?)['"]\s*\}\)\.selectOption\(['"].*?['"]\);?/g;

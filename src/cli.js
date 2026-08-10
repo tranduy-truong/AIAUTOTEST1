@@ -112,11 +112,11 @@ Viet tung test case bang tieng Viet, AI se dich sang code.
 Moi dong la 1 buoc, AI chuyen doi 1:1 sang Playwright.
 
 Vi du:
-  URL: https://hcm.mobifone.vn/qly-dttg/dang-nhap
+  URL: https://staging.example.com/login
   TC_01: Dang nhap thanh cong
   - Mo URL
-  - Nhap 'admin' vao o 'Nhap ten dang nhap'
-  - Nhap '123123' vao o 'Nhap mat khau'
+  - Nhap '<test_username>' vao o 'Nhap ten dang nhap'
+  - Nhap '<test_password>' vao o 'Nhap mat khau'
   - Bam nut 'Dang nhap'
   - Kiem tra: URL khong con chua 'dang-nhap'
 -----------------------------------------------------------------
