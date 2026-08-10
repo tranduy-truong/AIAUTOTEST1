@@ -342,6 +342,38 @@ export function nextStateStep(
   return undefined;
 }
 
+function normalizeActionText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+export function isLoginUrl(value: string): boolean {
+  try {
+    const pathname = new URL(value).pathname;
+    return /(?:^|\/)(?:dang-nhap|login|sign-in)(?:\/|$)/i.test(pathname);
+  } catch {
+    return /(?:dang-nhap|login|sign-in)/i.test(value);
+  }
+}
+
+export function protectedGotoAfterLogin(
+  steps: ParsedStep[],
+  currentIndex: number,
+): { step: ParsedStep; stepNumber: number } | undefined {
+  const current = steps[currentIndex];
+  const target = normalizeActionText(current?.target || '');
+  if (!['dang nhap', 'login', 'sign in'].includes(target)) return undefined;
+
+  const next = steps[currentIndex + 1];
+  if (next?.type !== 'goto' || !next.url || isLoginUrl(next.url)) return undefined;
+  return { step: next, stepNumber: currentIndex + 2 };
+}
+
 async function waitForStateSettled(page: Page): Promise<void> {
   try {
     await page.waitForLoadState('networkidle', { timeout: 8000 });
@@ -385,19 +417,25 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
     for (const testCase of testCases) {
       console.log(`[Live Runner] Dang thu thap DOM cho ${testCase.id}...`);
       const snapshots: DomSnapshot[] = [];
+      let preExecutedGotoIndex: number | undefined;
+      let abortRemainingSteps = false;
       // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
       const context = await browser.newContext();
       const page = await context.newPage();
 
       try {
         for (let index = 0; index < testCase.steps.length; index++) {
+          if (abortRemainingSteps) break;
           const step = testCase.steps[index];
           const stepNumber = index + 1;
 
           try {
             if (step.type === 'goto') {
               if (!step.url) throw new Error('Buoc goto khong co URL');
-              await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
+              if (preExecutedGotoIndex !== index) {
+                await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
+              }
+              preExecutedGotoIndex = undefined;
               await waitForStateSettled(page);
               snapshots.push(await captureSnapshot(page, `after step ${stepNumber}: ${step.raw}`));
               continue;
@@ -422,6 +460,25 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               const locator = await uniqueLocator(page, step, beforeAction);
               await locator.click({ timeout: 10000 });
               await waitForStateSettled(page);
+
+              // A successful click is not proof that authentication succeeded.
+              // When the scenario immediately opens a protected URL, execute
+              // that declared navigation as the auth probe. Redirecting back to
+              // login is explicit evidence of an invalid/missing auth session.
+              const protectedGoto = protectedGotoAfterLogin(testCase.steps, index);
+              if (protectedGoto?.step.url) {
+                await page.goto(protectedGoto.step.url, {
+                  timeout: 15000,
+                  waitUntil: 'domcontentloaded',
+                });
+                await waitForStateSettled(page);
+                if (isLoginUrl(page.url())) {
+                  throw new Error(
+                    `AUTHENTICATION_FAILED: website chuyen ve trang dang nhap khi mo ${protectedGoto.step.url}`,
+                  );
+                }
+                preExecutedGotoIndex = protectedGoto.stepNumber - 1;
+              }
 
               const expectedState = nextStateStep(testCase.steps, index);
               if (expectedState) {
@@ -473,6 +530,10 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
               reason,
             });
             console.warn(`[Live Runner]   WARNING step ${stepNumber}: ${reason} (URL: ${page.url()})`);
+            if (reason.startsWith('AUTHENTICATION_FAILED:')) {
+              abortRemainingSteps = true;
+              console.warn('[Live Runner]   STOP test case: cac buoc sau can phien dang nhap hop le');
+            }
           }
         }
       } finally {
