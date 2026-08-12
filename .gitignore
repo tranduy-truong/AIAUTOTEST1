@@ -4,6 +4,7 @@ node_modules
 /test-results/
 /playwright-report/
 /blob-report/
+/coverage/
 /playwright/.cache/
 /playwright/.auth/
 .env
@@ -21,6 +22,8 @@ node_modules
 /artifacts/planner-validation-errors.json
 /artifacts/locator-registry.json
 /artifacts/report.md
+/artifacts/unit/
+/tests/unit/ai-generated/
 /screenshots/
 *.log
 .DS_Store

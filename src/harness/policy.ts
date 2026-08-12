@@ -20,11 +20,6 @@ export class TestPolicyHarness {
       ? "Chẩn đoán nguyên nhân gốc rễ (Không tự sửa code để tránh che giấu bug thật)"
       : "Phân tích log và đề xuất bản vá code";
 
-    console.log(
-      `\n🚨 Phát hiện lỗi ở cấp độ [${level.toUpperCase()}]: ${suiteName}`,
-    );
-    console.log(`[CHÍNH SÁCH: ${mode.toUpperCase()}] ${actionTaken}...`);
-
     const prompt = `Bạn là chuyên gia Automation Testing.
 
 Phân tích lỗi sau từ bộ test [${level.toUpperCase()}] - Suite: ${suiteName}

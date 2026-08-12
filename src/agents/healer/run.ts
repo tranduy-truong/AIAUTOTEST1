@@ -6,6 +6,8 @@ import { runGenerator } from "../generator/run.js";
 import { loadStructuredE2EPlan } from "../planner/run.js";
 import { plannerPlanToTestCases } from "../planner/schema.js";
 import { buildActionPlan } from "../../core/action-plan.js";
+import { loadUnitSession } from '../../core/unit/artifacts.js';
+import { artifact, detail, section, warning } from '../../core/cli-ui.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,9 +34,88 @@ export interface HealerDiagnosis {
 }
 
 function failedLineFromLog(errorLog: string): number | undefined {
-  const matches = [...errorLog.matchAll(/\.spec\.[jt]s:(\d+)(?::\d+)?/gi)];
+  const matches = [...errorLog.matchAll(/\.(?:spec|test)\.[jt]sx?:(\d+)(?::\d+)?/gi)];
   const last = matches.at(-1)?.[1];
   return last ? Number(last) : undefined;
+}
+
+export function classifyUnitFailure(errorLog: string): HealerDiagnosis {
+  const normalized = errorLog
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd');
+  const failedLine = failedLineFromLog(errorLog);
+
+  if (/spawnsync .* einval|spawn .* einval|spawn .* enoent|is not recognized as an internal or external command/.test(normalized)) {
+    return {
+      category: 'ENVIRONMENT_ERROR',
+      reasonCode: 'UNIT_TEST_RUNNER_LAUNCH_FAILED',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+
+  if (/cannot find module|failed to resolve import|module not found|err_module_not_found|cannot find package/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'IMPORT_OR_ALIAS_NOT_RESOLVED',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/cannot access .* before initialization|mock factory|vi\.mock|jest\.mock|hoist/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'MOCK_SETUP_OR_HOISTING_ERROR',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/no test files found|no tests found|test suite must contain at least one test/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'TEST_DISCOVERY_CONFIGURATION_ERROR',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/err_invalid_arg_type|argument must be of type .* received undefined|path.*received undefined/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'GENERATED_INPUT_FIXTURE_INVALID',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/timed out|timeout|exceeded timeout/.test(normalized)) {
+    return {
+      category: 'TIMING_OR_ASYNC',
+      reasonCode: 'UNIT_ASYNC_DID_NOT_SETTLE',
+      confidence: 'medium', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/expected:|received:|assertionerror|expected .* to (?:be|equal|throw|match)/.test(normalized)) {
+    return {
+      category: 'ASSERTION_ERROR',
+      reasonCode: 'IMPLEMENTATION_DIFFERS_FROM_PLANNED_ORACLE',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/econnrefused|enotfound|network|database|connection refused/.test(normalized)) {
+    return {
+      category: 'TEST_DATA_ERROR',
+      reasonCode: 'UNMOCKED_EXTERNAL_DEPENDENCY',
+      confidence: 'medium', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  return {
+    category: 'UNKNOWN', reasonCode: 'UNIT_NEEDS_MORE_EVIDENCE', confidence: 'low',
+    canSelfHeal: false, preservesExpectedResult: true, recoveryAction: 'REPORT_ONLY', failedLine,
+  };
 }
 
 function targetNameFromLog(errorLog: string): string {
@@ -185,9 +266,7 @@ export async function runHealer(
   level: "unit" | "integration" | "e2e",
   errorLog: string,
 ) {
-  console.log(
-    `\n🩺 [Healer Agent] Đang chẩn đoán lỗi cho tầng: ${level.toUpperCase()}`,
-  );
+  section('03', 'Healer', 'Phân loại nguyên nhân; không tự đổi expected result');
 
   const promptFileName = `prompt-${level}.md`;
   const promptFilePath = path.join(__dirname, promptFileName);
@@ -202,7 +281,7 @@ export async function runHealer(
     return false;
   }
 
-  const diagnosis = classifyFailure(errorLog);
+  const diagnosis = level === 'unit' ? classifyUnitFailure(errorLog) : classifyFailure(errorLog);
   if (!fs.existsSync('artifacts')) fs.mkdirSync('artifacts');
   fs.writeFileSync(
     'artifacts/healer-diagnosis.json',
@@ -212,12 +291,29 @@ export async function runHealer(
       ...diagnosis,
     }, null, 2) + '\n',
   );
-  console.log(`   Phân loại: ${diagnosis.category} (${diagnosis.reasonCode})`);
-  console.log(
-    diagnosis.canSelfHeal
-      ? '   Healer có thể sửa test nhưng phải giữ nguyên Expected Result từ Planner.'
-      : '   Healer không tự đổi Expected Result; cần thêm bằng chứng hoặc xác nhận product bug.',
-  );
+  if (level === 'unit') {
+    try {
+      const session = loadUnitSession();
+      fs.writeFileSync(
+        path.join(session.runDirectory, 'healer-diagnosis.json'),
+        JSON.stringify({ level, diagnosedAt: new Date().toISOString(), policy: 'diagnose-only', ...diagnosis }, null, 2) + '\n',
+      );
+    } catch {
+      // Global artifact above remains available when there is no Unit session.
+    }
+  }
+  const diagnosisLabels: Record<string, string> = {
+    GENERATED_INPUT_FIXTURE_INVALID: 'Dữ liệu đầu vào do Generator tạo chưa đúng kiểu',
+    IMPLEMENTATION_DIFFERS_FROM_PLANNED_ORACLE: 'Kết quả thực tế khác expected đã lập',
+    IMPORT_OR_ALIAS_NOT_RESOLVED: 'Import hoặc alias của dự án chưa được resolve',
+    UNIT_TEST_RUNNER_LAUNCH_FAILED: 'Không khởi chạy được test runner',
+    UNIT_ASYNC_DID_NOT_SETTLE: 'Tác vụ bất đồng bộ không hoàn tất đúng hạn',
+    UNIT_NEEDS_MORE_EVIDENCE: 'Chưa đủ dữ liệu để kết luận nguyên nhân',
+  };
+  warning(diagnosisLabels[diagnosis.reasonCode] || diagnosis.category);
+  detail('Mã chẩn đoán', diagnosis.reasonCode);
+  detail('Chính sách', diagnosis.canSelfHeal ? 'Có thể sửa test nhưng giữ nguyên expected.' : 'Chỉ chẩn đoán, không tự đổi expected.');
+  artifact('Chi tiết kỹ thuật', 'healer-diagnosis.json');
 
   let recovery: { ok: boolean; reason: string } | undefined;
   if (level === 'e2e' && diagnosis.canSelfHeal) {

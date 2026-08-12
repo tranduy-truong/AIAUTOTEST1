@@ -1,0 +1,10 @@
+{
+  "level": "unit",
+  "diagnosedAt": "2026-08-12T11:54:27.085Z",
+  "category": "ASSERTION_ERROR",
+  "reasonCode": "IMPLEMENTATION_DIFFERS_FROM_PLANNED_ORACLE",
+  "confidence": "high",
+  "canSelfHeal": false,
+  "preservesExpectedResult": true,
+  "recoveryAction": "REPORT_ONLY"
+}

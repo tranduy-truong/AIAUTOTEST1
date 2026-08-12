@@ -11,6 +11,7 @@
   "include": [
     "src/agents/crawler/live-runner.ts",
     "src/agents/generator/run.ts",
+    "src/agents/generator/unit-generator.ts",
     "src/agents/healer/run.ts",
     "src/agents/planner/run.ts",
     "src/agents/planner/schema.ts",
@@ -20,6 +21,7 @@
     "src/core/action-plan.ts",
     "src/agents/crawler/locator-registry.ts",
     "src/core/locator-resolver.ts",
+    "src/core/unit/**/*.ts",
     "tests/unit/**/*.ts"
   ]
 }

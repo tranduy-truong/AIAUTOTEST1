@@ -9,6 +9,33 @@ import {
   validateStructuredE2EPlan,
   type PlannerValidationIssue,
 } from './validator.js';
+import {
+  loadUnitSession,
+  saveUnitPlan,
+} from '../../core/unit/artifacts.js';
+import { renderUnitPlanMarkdown } from '../../core/unit/markdown-renderer.js';
+import {
+  validateStructuredUnitPlan,
+  type UnitPlanValidationIssue,
+} from '../../core/unit/plan-validator.js';
+import type {
+  StructuredUnitPlan,
+  UnitContextBundle,
+} from '../../core/unit/schema.js';
+import {
+  resolveDeterministicUnitPlan,
+  resolveUnitPlannerProposal,
+} from '../../core/unit/planner-fallback.js';
+import {
+  artifact,
+  detail,
+  error as uiError,
+  progress,
+  section,
+  success,
+  summary,
+  warning,
+} from '../../core/cli-ui.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const E2E_JSON_PATH = 'artifacts/test-plan-e2e.json';
@@ -295,11 +322,202 @@ async function runStructuredE2EPlanner(
   return true;
 }
 
+function createUnitTask(
+  systemPrompt: string,
+  context: UnitContextBundle,
+): string {
+  return `${systemPrompt}\n\n---\n\n[UNIT CONTEXT ĐÃ ĐƯỢC CODE READER XÁC MINH]\n${JSON.stringify(context)}\n\n[HẾT CONTEXT]\n\nChỉ xuất JSON object đúng schema. Không thêm markdown.`;
+}
+
+function unitContextForAI(context: UnitContextBundle): UnitContextBundle {
+  return {
+    ...context,
+    project: {
+      ...context.project,
+      projectRoot: '<PROJECT_ROOT>',
+    },
+  };
+}
+
+async function planOneUnitTarget(
+  systemPrompt: string,
+  context: UnitContextBundle,
+  index: number,
+): Promise<{
+  plan: StructuredUnitPlan | null;
+  issues: UnitPlanValidationIssue[];
+  skippedIssues: UnitPlanValidationIssue[];
+  diagnostics: UnitPlanValidationIssue[];
+  mode: 'ai' | 'salvaged-ai' | 'deterministic' | 'deterministic-fallback';
+  rawOutput: string;
+}> {
+  const aiContext = unitContextForAI(context);
+  const deterministic = resolveDeterministicUnitPlan(aiContext);
+  // Explicit tester requirements are a business oracle and deserve semantic
+  // AI interpretation. With no requirements, the AST contract is the more
+  // reliable and cheaper source of truth.
+  if (deterministic.plan && !aiContext.requirements?.trim()) {
+    return { ...deterministic, rawOutput: '' };
+  }
+
+  // AI is invoked only for targets whose local AST contract cannot produce a
+  // structurally safe intent. It is an augmentation path, never a prerequisite.
+  const task = createUnitTask(systemPrompt, aiContext);
+  const result = await callPlannerAdapter(task, `_unit_${index}`);
+  const resolved = resolveUnitPlannerProposal(result.rawOutput, aiContext, !result.ok);
+  if (resolved.mode === 'deterministic-fallback' && resolved.plan) {
+    warning(`Target ${index}: AI không dùng được; đã chuyển sang phân tích AST.`);
+  }
+  return { ...resolved, rawOutput: result.rawOutput };
+}
+
+async function runStructuredUnitPlanner(
+  systemPrompt: string,
+  contextData: string,
+): Promise<boolean> {
+  ensureArtifactsDir();
+  let context: UnitContextBundle;
+  try {
+    context = JSON.parse(contextData) as UnitContextBundle;
+    if (context.version !== 1 || !context.project || !Array.isArray(context.targets) || context.targets.length === 0) {
+      throw new Error('Context thiếu project hoặc target.');
+    }
+  } catch (error) {
+    uiError(`Unit Context không hợp lệ: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    return false;
+  }
+
+  const plannedTargets: StructuredUnitPlan['targets'] = [];
+  const clarifications: string[] = [];
+  const allIssues: UnitPlanValidationIssue[] = [];
+  const rawOutputs: string[] = [];
+  const skippedTestCaseIssues: UnitPlanValidationIssue[] = [];
+  const plannerDiagnostics: Array<{
+    target: string;
+    mode: 'ai' | 'salvaged-ai' | 'deterministic' | 'deterministic-fallback';
+    issues: UnitPlanValidationIssue[];
+  }> = [];
+  const plannerModes: Array<'ai' | 'salvaged-ai' | 'deterministic' | 'deterministic-fallback'> = [];
+  for (let index = 0; index < context.targets.length; index++) {
+    const singleContext: UnitContextBundle = { ...context, targets: [context.targets[index]] };
+    progress(
+      index + 1,
+      context.targets.length,
+      `${context.targets[index].sourceFile} › ${context.targets[index].symbol}`,
+    );
+    const result = await planOneUnitTarget(systemPrompt, singleContext, index + 1);
+    rawOutputs.push(result.rawOutput);
+    skippedTestCaseIssues.push(...result.skippedIssues);
+    plannerModes.push(result.mode);
+    if (result.diagnostics.length > 0) {
+      plannerDiagnostics.push({
+        target: `${context.targets[index].sourceFile}#${context.targets[index].symbol}`,
+        mode: result.mode,
+        issues: result.diagnostics,
+      });
+    }
+    if (!result.plan || result.issues.length > 0) {
+      allIssues.push(...result.issues);
+      continue;
+    }
+    plannedTargets.push(...result.plan.targets);
+    clarifications.push(...result.plan.clarifications);
+  }
+
+  if (skippedTestCaseIssues.length > 0) {
+    fs.writeFileSync(
+      path.join(loadUnitSession().runDirectory, 'planner-skipped-test-cases.json'),
+      `${JSON.stringify(skippedTestCaseIssues, null, 2)}\n`,
+    );
+    warning(`${new Set(skippedTestCaseIssues.flatMap(issue => issue.testCaseId ? [issue.testCaseId] : [])).size} test case chưa an toàn đã được bỏ qua.`);
+  }
+
+  const session = loadUnitSession();
+  if (plannerDiagnostics.length > 0) {
+    fs.writeFileSync(
+      path.join(session.runDirectory, 'planner-ai-diagnostics.json'),
+      `${JSON.stringify(plannerDiagnostics, null, 2)}\n`,
+    );
+  }
+  if (allIssues.length > 0 || plannedTargets.length !== context.targets.length) {
+    fs.writeFileSync(
+      path.join(session.runDirectory, 'planner-validation-errors.json'),
+      `${JSON.stringify(allIssues, null, 2)}\n`,
+    );
+    fs.writeFileSync(
+      path.join(session.runDirectory, 'test-plan-unit.invalid.txt'),
+      `${rawOutputs.join('\n\n--- TARGET OUTPUT ---\n\n')}\n`,
+    );
+    if (plannedTargets.length === 0) {
+      uiError(`Planner chưa tạo được kế hoạch an toàn cho ${context.targets.length} target.`);
+      for (const issue of allIssues.slice(0, 8)) {
+        detail(issue.code, `${issue.testCaseId ? `${issue.testCaseId}: ` : ''}${issue.message}`);
+      }
+      artifact('Chi tiết kỹ thuật', 'planner-validation-errors.json');
+      return false;
+    }
+    warning(`${context.targets.length - plannedTargets.length} target chưa an toàn đã được bỏ qua; các target còn lại vẫn tiếp tục.`);
+    artifact('Chi tiết kỹ thuật', 'planner-validation-errors.json');
+  }
+
+  const plan: StructuredUnitPlan = {
+    version: 1,
+    source: plannerModes.every(mode => mode === 'ai')
+      ? 'ai-planner'
+      : plannerModes.every(mode => mode === 'deterministic' || mode === 'deterministic-fallback')
+        ? 'deterministic-planner'
+        : 'hybrid-planner',
+    project: {
+      name: context.project.projectName,
+      root: context.project.projectRoot,
+      testFramework: context.project.testFramework,
+    },
+    targets: plannedTargets,
+    clarifications: [...new Set(clarifications)],
+  };
+  const validContext: UnitContextBundle = {
+    ...context,
+    targets: context.targets.filter(target => plannedTargets.some(
+      planned => planned.sourceFile === target.sourceFile && planned.symbol === target.symbol,
+    )),
+  };
+  const finalIssues = validateStructuredUnitPlan(plan, validContext);
+  const finalBlockingIssues = finalIssues.filter(issue => issue.code !== 'UNCOVERED_BRANCH');
+  if (finalBlockingIssues.length > 0) {
+    fs.writeFileSync(
+      path.join(session.runDirectory, 'planner-validation-errors.json'),
+      `${JSON.stringify(finalBlockingIssues, null, 2)}\n`,
+    );
+    uiError(`Unit Plan hợp nhất không hợp lệ (${finalBlockingIssues.length} lỗi).`);
+    return false;
+  }
+
+  saveUnitPlan(plan, session);
+  const markdown = renderUnitPlanMarkdown(plan);
+  fs.writeFileSync(path.join(session.runDirectory, 'test-plan-unit.md'), markdown);
+  fs.writeFileSync('artifacts/test-plan-unit.md', markdown);
+  const deterministicCount = plannerModes.filter(mode =>
+    mode === 'deterministic' || mode === 'deterministic-fallback'
+  ).length;
+  summary('Planner hoàn tất', [
+    ['Target sẵn sàng', `${plannedTargets.length}/${context.targets.length}`],
+    ['Phân tích AST', `${deterministicCount}/${plannerModes.length}`],
+    ['Dùng AI', `${plannerModes.length - deterministicCount}/${plannerModes.length}`],
+    ['Kế hoạch', 'test-plan-unit.json'],
+  ], plannedTargets.length === context.targets.length ? 'success' : 'warning');
+  success('Kế hoạch Unit Test đã sẵn sàng.');
+  return true;
+}
+
 export async function runPlanner(
   level: 'unit' | 'integration' | 'e2e',
   contextData: string,
 ): Promise<boolean> {
-  console.log(`\n🧠 [Planner Agent] Đang phân tích yêu cầu cho tầng: ${level.toUpperCase()}`);
+  if (level === 'unit') {
+    section('01', 'Planner', 'Phân tích AST và lập Test Intent');
+  } else {
+    console.log(`\n🧠 [Planner Agent] Đang phân tích yêu cầu cho tầng: ${level.toUpperCase()}`);
+  }
 
   const promptFilePath = path.join(__dirname, `prompt-${level}.md`);
   if (!fs.existsSync(promptFilePath)) {
@@ -310,6 +528,9 @@ export async function runPlanner(
 
   if (level === 'e2e') {
     return runStructuredE2EPlanner(systemPrompt, contextData);
+  }
+  if (level === 'unit') {
+    return runStructuredUnitPlanner(systemPrompt, contextData);
   }
 
   const taskContent = `${systemPrompt}\n\n[THÔNG TIN THỰC TẾ]\n${contextData}\n\nChỉ xuất mảng JSON đúng schema.`;
