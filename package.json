@@ -14,6 +14,7 @@
     "test:unit": "node src/cli.js --level unit",
     "test:unit:cov": "vitest run tests/unit --coverage",
     "test:integration": "vitest run tests/integration",
+    "test:api": "tsx src/api-test-cli.js",
     "test:core": "vitest run tests/unit",
     "typecheck:core": "tsc -p tsconfig.core.json",
     "test:e2e": "node src/cli.js --level e2e",

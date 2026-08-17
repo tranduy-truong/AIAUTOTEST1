@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "baseUrl": "http://localhost:3000",
+  "defaultHeaders": {
+    "accept": "application/json"
+  },
+  "tests": [
+    {
+      "id": "API-001",
+      "name": "Healthcheck API",
+      "request": {
+        "method": "GET",
+        "path": "/api/health"
+      },
+      "assertions": [
+        {
+          "type": "STATUS",
+          "expected": 200
+        },
+        {
+          "type": "BODY_PATH_EXISTS",
+          "path": "$.status"
+        }
+      ]
+    },
+    {
+      "id": "API-002",
+      "name": "Create order example",
+      "request": {
+        "method": "POST",
+        "path": "/api/orders",
+        "body": {
+          "productId": 123,
+          "quantity": 1
+        }
+      },
+      "assertions": [
+        {
+          "type": "STATUS_IN",
+          "expected": [200, 201]
+        },
+        {
+          "type": "BODY_PATH_TYPE",
+          "path": "$.id",
+          "expected": "number"
+        }
+      ]
+    }
+  ]
+}
