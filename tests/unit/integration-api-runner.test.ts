@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import { evaluateApiAssertion, getBodyPath } from '../../src/core/integration/api/assertions.js';
+import { validateApiBaseUrl } from '../../src/core/integration/api/security.js';
 import { runApiTestSuite } from '../../src/core/integration/api/runner.js';
 
 let server: http.Server | undefined;
@@ -61,6 +62,14 @@ describe('API Integration Test Foundation', () => {
     expect(evaluateApiAssertion({ type: 'HEADER_EQUALS', name: 'X-Test', expected: 'api' }, response).ok).toBe(true);
     expect(evaluateApiAssertion({ type: 'BODY_PATH_EQUALS', path: '$.id', expected: 42 }, response).ok).toBe(true);
     expect(evaluateApiAssertion({ type: 'BODY_PATH_TYPE', path: '$.active', expected: 'boolean' }, response).ok).toBe(true);
+  });
+
+  it('blocks production-like API hosts and requires explicit external-host permission', () => {
+    expect(() => validateApiBaseUrl('https://api.production.example.com')).toThrow('[API Security]');
+    expect(() => validateApiBaseUrl('https://staging.example.com')).toThrow('[API Security]');
+    expect(() => validateApiBaseUrl('https://staging.example.com', {
+      allowedHostnames: ['staging.example.com'],
+    })).not.toThrow();
   });
 
   it('runs a real HTTP request and reports an incorrect expected status as a failure', async () => {

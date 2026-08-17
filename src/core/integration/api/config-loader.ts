@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { validateApiBaseUrl } from './security.js';
 import type { ApiTestSuite } from './schema.js';
 
 export function loadApiTestSuite(
@@ -35,12 +36,9 @@ export function validateApiSuite(
   if (!suite.baseUrl || typeof suite.baseUrl !== 'string') {
     throw new Error(`[API Config] ${source} thiếu baseUrl.`);
   }
-  try {
-    const url = new URL(suite.baseUrl);
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported protocol');
-  } catch {
-    throw new Error(`[API Config] baseUrl không phải HTTP/HTTPS URL hợp lệ: ${suite.baseUrl}`);
-  }
+
+  validateApiBaseUrl(suite.baseUrl, suite.security);
+
   if (!Array.isArray(suite.tests) || suite.tests.length === 0) {
     throw new Error('[API Config] tests phải là mảng và có ít nhất một test case.');
   }
@@ -54,6 +52,12 @@ export function validateApiSuite(
     }
     if (!testCase.request || typeof testCase.request !== 'object') {
       throw new Error(`[API Config] tests[${index}] thiếu request.`);
+    }
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(testCase.request.method)) {
+      throw new Error(`[API Config] tests[${index}].request.method không hợp lệ.`);
+    }
+    if (!testCase.request.path || typeof testCase.request.path !== 'string') {
+      throw new Error(`[API Config] tests[${index}].request.path phải là string.`);
     }
     if (!Array.isArray(testCase.assertions) || testCase.assertions.length === 0) {
       throw new Error(`[API Config] tests[${index}] phải có ít nhất một assertion.`);

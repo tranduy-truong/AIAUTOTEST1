@@ -1,6 +1,11 @@
 {
   "version": 1,
   "baseUrl": "http://localhost:3000",
+  "security": {
+    "allowedHostnames": ["localhost", "127.0.0.1"],
+    "allowExternalHosts": false,
+    "blockProductionLikeHosts": true
+  },
   "defaultHeaders": {
     "accept": "application/json"
   },

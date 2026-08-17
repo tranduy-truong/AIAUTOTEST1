@@ -1,3 +1,5 @@
+import type { ApiSecurityConfig } from './security.js';
+
 export type ApiHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
 
 export type ApiBodyType = 'json' | 'text' | 'empty';
@@ -40,6 +42,7 @@ export interface ApiTestCase {
 export interface ApiTestSuite {
   version: 1;
   baseUrl: string;
+  security?: ApiSecurityConfig;
   defaultHeaders?: Record<string, string>;
   tests: ApiTestCase[];
 }
